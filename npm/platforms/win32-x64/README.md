@@ -1,4 +1,4 @@
-# @qtflow/cli-win32-x64
+# @xehxx/qtflow-cli-win32-x64
 
 This package ships the Windows x64 `qtflow.exe` binary.
 

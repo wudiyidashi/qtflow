@@ -355,8 +355,8 @@ Probes (`cmake --version`, `vswhere`) sit behind the `Probe` trait; unit/integra
 **Decision: per-platform optional packages + a thin JS resolver. Avoid postinstall downloads as the default.**
 
 Layout:
-- Main package `qtflow` (or `@qtflow/cli`) with `"bin": { "qtflow": "bin/qtflow.js" }`.
-- `optionalDependencies`: `@qtflow/cli-win32-x64`, `@qtflow/cli-linux-x64`, `@qtflow/cli-darwin-x64`, `@qtflow/cli-darwin-arm64`. Each is a tiny package shipping just the prebuilt binary with `os`/`cpu` fields so npm installs only the matching one.
+- Main package `qtflow` with `"bin": { "qtflow": "bin/qtflow.js" }`.
+- `optionalDependencies`: `@xehxx/qtflow-cli-win32-x64`, `@xehxx/qtflow-cli-linux-x64`, `@xehxx/qtflow-cli-darwin-x64`, `@xehxx/qtflow-cli-darwin-arm64`. Each is a tiny package shipping just the prebuilt binary with `os`/`cpu` fields so npm installs only the matching one.
 - `bin/qtflow.js` resolves the binary from the installed platform package and `execFileSync`-spawns it, forwarding argv and exit code.
 
 Why optionalDependencies over postinstall download:

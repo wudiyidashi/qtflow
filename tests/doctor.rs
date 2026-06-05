@@ -2,10 +2,6 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::Value;
 
-fn slash(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
 fn write_cache(root: &std::path::Path, dir: &str, build_type: &str, generator: &str) {
     write_cache_with_prefix(root, dir, build_type, generator, "");
 }
@@ -78,9 +74,12 @@ build_dir = "build/release"
         .clone();
 
     let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+    let actual_root = std::path::Path::new(json["projectRoot"].as_str().expect("projectRoot"))
+        .canonicalize()
+        .expect("canonical actual root");
     assert_eq!(
-        json["projectRoot"].as_str(),
-        Some(slash(temp.path()).as_str())
+        actual_root,
+        temp.path().canonicalize().expect("canonical temp")
     );
     assert_eq!(json["profile"], "release");
     assert_eq!(

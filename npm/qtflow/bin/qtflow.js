@@ -6,19 +6,19 @@ const path = require("path");
 
 const PACKAGES = {
   "win32:x64": {
-    packageName: "@qtflow/cli-win32-x64",
+    packageName: "@xehxx/qtflow-cli-win32-x64",
     binary: "qtflow.exe",
   },
   "linux:x64": {
-    packageName: "@qtflow/cli-linux-x64",
+    packageName: "@xehxx/qtflow-cli-linux-x64",
     binary: "qtflow",
   },
   "darwin:x64": {
-    packageName: "@qtflow/cli-darwin-x64",
+    packageName: "@xehxx/qtflow-cli-darwin-x64",
     binary: "qtflow",
   },
   "darwin:arm64": {
-    packageName: "@qtflow/cli-darwin-arm64",
+    packageName: "@xehxx/qtflow-cli-darwin-arm64",
     binary: "qtflow",
   },
 };

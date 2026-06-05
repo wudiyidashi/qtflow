@@ -1,4 +1,4 @@
-# @qtflow/cli-darwin-x64
+# @xehxx/qtflow-cli-darwin-x64
 
 This package ships the macOS x64 `qtflow` binary.
 

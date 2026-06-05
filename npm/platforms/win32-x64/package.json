@@ -1,5 +1,5 @@
 {
-  "name": "@qtflow/cli-win32-x64",
+  "name": "@xehxx/qtflow-cli-win32-x64",
   "version": "0.1.0",
   "description": "Prebuilt qtflow CLI binary for Windows x64.",
   "license": "UNLICENSED",

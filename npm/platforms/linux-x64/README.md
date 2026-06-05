@@ -1,4 +1,4 @@
-# @qtflow/cli-linux-x64
+# @xehxx/qtflow-cli-linux-x64
 
 This package ships the Linux x64 `qtflow` binary.
 

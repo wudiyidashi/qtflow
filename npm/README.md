@@ -5,10 +5,10 @@ This directory contains npm packaging infrastructure only. Nothing here publishe
 ## Packages
 
 - `npm/qtflow`: main `qtflow` package. It installs `bin/qtflow.js`, a dependency-free Node shim.
-- `npm/platforms/win32-x64`: `@qtflow/cli-win32-x64`, populated with `bin/qtflow.exe`.
-- `npm/platforms/linux-x64`: `@qtflow/cli-linux-x64`, populated with `bin/qtflow`.
-- `npm/platforms/darwin-x64`: `@qtflow/cli-darwin-x64`, populated with `bin/qtflow`.
-- `npm/platforms/darwin-arm64`: `@qtflow/cli-darwin-arm64`, populated with `bin/qtflow`.
+- `npm/platforms/win32-x64`: `@xehxx/qtflow-cli-win32-x64`, populated with `bin/qtflow.exe`.
+- `npm/platforms/linux-x64`: `@xehxx/qtflow-cli-linux-x64`, populated with `bin/qtflow`.
+- `npm/platforms/darwin-x64`: `@xehxx/qtflow-cli-darwin-x64`, populated with `bin/qtflow`.
+- `npm/platforms/darwin-arm64`: `@xehxx/qtflow-cli-darwin-arm64`, populated with `bin/qtflow`.
 
 The main package uses optional dependencies so npm installs only the platform package that matches the user's `os` and `cpu`.
 
@@ -44,7 +44,7 @@ The main package uses optional dependencies so npm installs only the platform pa
    npm pack ./npm/qtflow --dry-run
    ```
 
-8. Publish the platform packages first, then publish the main package:
+8. Publish the platform packages first, then publish the main package. Scoped public packages require `npm publish --access public`:
 
    ```sh
    npm publish ./npm/platforms/win32-x64 --access public

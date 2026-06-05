@@ -57,10 +57,6 @@ fn write_cache_with_prefix(
     .expect("write cache");
 }
 
-fn slash(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
 #[test]
 fn init_json_creates_detected_claude_skill_and_config_then_rerun_skips() {
     let temp = fixture_repo();
@@ -93,7 +89,13 @@ fn init_json_creates_detected_claude_skill_and_config_then_rerun_skips() {
     let config = temp.path().join(".qtflow.toml");
     assert!(skill.is_file());
     assert!(config.is_file());
-    assert_eq!(json["projectRoot"], slash(temp.path()));
+    let actual_root = std::path::Path::new(json["projectRoot"].as_str().expect("projectRoot"))
+        .canonicalize()
+        .expect("canonical actual root");
+    assert_eq!(
+        actual_root,
+        temp.path().canonicalize().expect("canonical temp")
+    );
     assert_eq!(json["actions"].as_array().expect("actions").len(), 2);
     assert!(json["actions"].as_array().unwrap().iter().all(|action| {
         action["status"] == "created" && !action["path"].as_str().unwrap().contains('\\')

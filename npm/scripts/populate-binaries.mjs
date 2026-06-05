@@ -11,7 +11,7 @@ const REPO_ROOT = path.resolve(NPM_ROOT, "..");
 const PLATFORMS = [
   {
     platform: "win32-x64",
-    packageName: "@qtflow/cli-win32-x64",
+    packageName: "@xehxx/qtflow-cli-win32-x64",
     target: "x86_64-pc-windows-msvc",
     archiveExt: "zip",
     archiveBinary: "qtflow.exe",
@@ -19,7 +19,7 @@ const PLATFORMS = [
   },
   {
     platform: "linux-x64",
-    packageName: "@qtflow/cli-linux-x64",
+    packageName: "@xehxx/qtflow-cli-linux-x64",
     target: "x86_64-unknown-linux-gnu",
     archiveExt: "tar.gz",
     archiveBinary: "qtflow",
@@ -27,7 +27,7 @@ const PLATFORMS = [
   },
   {
     platform: "darwin-x64",
-    packageName: "@qtflow/cli-darwin-x64",
+    packageName: "@xehxx/qtflow-cli-darwin-x64",
     target: "x86_64-apple-darwin",
     archiveExt: "tar.gz",
     archiveBinary: "qtflow",
@@ -35,7 +35,7 @@ const PLATFORMS = [
   },
   {
     platform: "darwin-arm64",
-    packageName: "@qtflow/cli-darwin-arm64",
+    packageName: "@xehxx/qtflow-cli-darwin-arm64",
     target: "aarch64-apple-darwin",
     archiveExt: "tar.gz",
     archiveBinary: "qtflow",

@@ -15,10 +15,10 @@
     "README.md"
   ],
   "optionalDependencies": {
-    "@qtflow/cli-win32-x64": "0.1.0",
-    "@qtflow/cli-linux-x64": "0.1.0",
-    "@qtflow/cli-darwin-x64": "0.1.0",
-    "@qtflow/cli-darwin-arm64": "0.1.0"
+    "@xehxx/qtflow-cli-win32-x64": "0.1.0",
+    "@xehxx/qtflow-cli-linux-x64": "0.1.0",
+    "@xehxx/qtflow-cli-darwin-x64": "0.1.0",
+    "@xehxx/qtflow-cli-darwin-arm64": "0.1.0"
   },
   "engines": {
     "node": ">=14"

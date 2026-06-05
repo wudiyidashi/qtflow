@@ -1,5 +1,5 @@
 {
-  "name": "@qtflow/cli-darwin-arm64",
+  "name": "@xehxx/qtflow-cli-darwin-arm64",
   "version": "0.1.0",
   "description": "Prebuilt qtflow CLI binary for macOS arm64.",
   "license": "UNLICENSED",

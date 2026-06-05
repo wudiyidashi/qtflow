@@ -253,10 +253,9 @@ Build targets:
 
 Recommended approach:
 
-- package name: `qtflow` or `@qtflow/cli`;
+- package name: `qtflow`;
 - `bin`: `qtflow`;
 - wrapper script locates platform binary under package directory;
 - optional platform packages can be added later.
 
 Avoid requiring Rust toolchain on npm install.
-
