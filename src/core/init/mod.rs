@@ -17,12 +17,15 @@ use crate::core::path::{path_to_slash, serialize_path};
 
 pub const BEGIN_MARKER: &str = "<!-- BEGIN qtflow-build-test (managed by `qtflow init`) -->";
 pub const END_MARKER: &str = "<!-- END qtflow-build-test -->";
+pub const GLOBAL_CODEX_AGENT_LABEL: &str = "codex-global";
+pub const GLOBAL_CODEX_SKILL_NAME: &str = "qtflow-build-test";
 const DEBUG_CONFIG_NAME: &str = "Debug";
 const RELEASE_CONFIG_NAME: &str = "Release";
+const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
 const SKILL_FRONTMATTER: &str = r#"---
 name: qtflow-build-test
-description: "Build and test Qt/CMake projects through qtflow. Use when asked to compile, build, run CTest, run focused Qt tests, diagnose MSVC/Qt/CMake setup issues, or avoid rediscovering Visual Studio Developer Command Prompt setup."
+description: "Build and test Qt/CMake projects through qtflow. Use when asked to compile, build, run CTest, run focused Qt tests, diagnose MSVC/Qt/CMake setup issues, or avoid rediscovering the Visual Studio Developer Command Prompt setup. Complements qmake-based skills by covering CMake/CTest projects."
 ---"#;
 
 const SKILL_BODY: &str = r#"# QtFlow Build Test
@@ -149,6 +152,7 @@ pub enum InitStatus {
 pub struct InitAction {
     pub kind: InitActionKind,
     pub agent: Option<Agent>,
+    pub agent_label: Option<String>,
     pub path: PathBuf,
     pub status: InitStatus,
     pub source: Option<String>,
@@ -354,12 +358,71 @@ pub fn skill_template() -> String {
 }
 
 pub fn cursor_skill_template() -> String {
-    let description = r#""Build and test Qt/CMake projects through qtflow. Use when asked to compile, build, run CTest, run focused Qt tests, diagnose MSVC/Qt/CMake setup issues, or avoid rediscovering Visual Studio Developer Command Prompt setup.""#;
+    let description = r#""Build and test Qt/CMake projects through qtflow. Use when asked to compile, build, run CTest, run focused Qt tests, diagnose MSVC/Qt/CMake setup issues, or avoid rediscovering the Visual Studio Developer Command Prompt setup. Complements qmake-based skills by covering CMake/CTest projects.""#;
     format!("---\ndescription: {description}\nalwaysApply: false\n---\n\n{SKILL_BODY}\n")
 }
 
 pub fn codex_managed_section() -> String {
     format!("{BEGIN_MARKER}\n## qtflow-build-test\n\n{SKILL_BODY}\n{END_MARKER}\n")
+}
+
+pub fn global_codex_skill_template() -> String {
+    skill_template()
+}
+
+pub fn global_codex_openai_yaml() -> String {
+    r#"interface:
+  display_name: "QtFlow Build Test"
+  short_description: "Build and test Qt/CMake projects through qtflow."
+  default_prompt: "Build and run the focused test for this change with: qtflow check <target>."
+"#
+    .to_string()
+}
+
+pub fn resolve_codex_skills_root(
+    env: &BTreeMap<String, String>,
+    home_dir: Option<&Path>,
+) -> Result<PathBuf, InitPlanError> {
+    if let Some(codex_home) = env.get(CODEX_HOME_ENV).filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(codex_home).join("skills"));
+    }
+
+    let home = home_dir
+        .map(Path::to_path_buf)
+        .or_else(|| home_from_env(env))
+        .ok_or_else(|| InitPlanError {
+            message: "CODEX_HOME is unset and no user home directory was available".to_string(),
+        })?;
+
+    Ok(home.join(".codex").join("skills"))
+}
+
+pub fn plan_global_codex_skill_actions(
+    skills_root: &Path,
+    force: bool,
+    dry_run: bool,
+    fs: &impl InitFileSystem,
+) -> Vec<InitAction> {
+    let skill_dir = skills_root.join(GLOBAL_CODEX_SKILL_NAME);
+    let skill_dir_exists = fs.exists(&skill_dir);
+    vec![
+        plan_global_codex_file_action(
+            skill_dir.join("SKILL.md"),
+            global_codex_skill_template(),
+            force,
+            dry_run,
+            skill_dir_exists,
+            fs,
+        ),
+        plan_global_codex_file_action(
+            skill_dir.join("agents/openai.yaml"),
+            global_codex_openai_yaml(),
+            force,
+            dry_run,
+            skill_dir_exists,
+            fs,
+        ),
+    ]
 }
 
 pub fn starter_config_toml_from_presets(presets: &[String]) -> String {
@@ -442,7 +505,7 @@ pub fn init_json_report(plan: &InitPlan) -> InitJsonReport {
             .iter()
             .map(|action| InitJsonAction {
                 kind: action.kind.json_name().to_string(),
-                agent: action.agent.map(|agent| agent.name().to_string()),
+                agent: action.agent_name().map(str::to_string),
                 path: path_to_slash(&action.path),
                 status: action.status.json_name().to_string(),
                 source: action.source.clone(),
@@ -517,6 +580,7 @@ fn plan_skill_action(
     InitAction {
         kind: InitActionKind::Skill,
         agent: Some(agent),
+        agent_label: None,
         path,
         status: if codex_append {
             action_status(false, opts.force, opts.dry_run)
@@ -533,6 +597,33 @@ fn plan_skill_action(
             WriteOperation::AppendManagedSection
         } else {
             WriteOperation::Write
+        },
+    }
+}
+
+fn plan_global_codex_file_action(
+    path: PathBuf,
+    content: String,
+    force: bool,
+    dry_run: bool,
+    skill_dir_exists: bool,
+    fs: &impl InitFileSystem,
+) -> InitAction {
+    let exists = skill_dir_exists || fs.exists(&path);
+    let will_write = !exists || force;
+
+    InitAction {
+        kind: InitActionKind::Skill,
+        agent: None,
+        agent_label: Some(GLOBAL_CODEX_AGENT_LABEL.to_string()),
+        path,
+        status: action_status(exists, force, dry_run),
+        source: None,
+        content: will_write.then_some(content),
+        operation: if will_write && !dry_run {
+            WriteOperation::Write
+        } else {
+            WriteOperation::None
         },
     }
 }
@@ -557,6 +648,7 @@ fn plan_config_action(
         InitAction {
             kind: InitActionKind::Config,
             agent: None,
+            agent_label: None,
             path,
             status: action_status(exists, opts.force, opts.dry_run),
             source: Some(selection.source.clone()),
@@ -1086,6 +1178,23 @@ fn skill_path(root: &Path, agent: Agent) -> PathBuf {
     }
 }
 
+fn home_from_env(env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    if cfg!(windows) {
+        env.get("USERPROFILE")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                let drive = env.get("HOMEDRIVE").filter(|value| !value.is_empty())?;
+                let path = env.get("HOMEPATH").filter(|value| !value.is_empty())?;
+                Some(PathBuf::from(format!("{drive}{path}")))
+            })
+    } else {
+        env.get("HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    }
+}
+
 fn action_status(exists: bool, force: bool, dry_run: bool) -> InitStatus {
     match (dry_run, exists, force) {
         (true, false, _) => InitStatus::WouldCreate,
@@ -1150,6 +1259,12 @@ impl Agent {
     }
 }
 
+impl InitAction {
+    pub fn agent_name(&self) -> Option<&str> {
+        self.agent.map(Agent::name).or(self.agent_label.as_deref())
+    }
+}
+
 impl InitActionKind {
     fn json_name(&self) -> &'static str {
         match self {
@@ -1206,6 +1321,13 @@ mod tests {
         plan.actions
             .iter()
             .filter_map(|action| action.agent)
+            .collect()
+    }
+
+    fn action_agent_names(plan: &InitPlan) -> Vec<&str> {
+        plan.actions
+            .iter()
+            .filter_map(InitAction::agent_name)
             .collect()
     }
 
@@ -1345,6 +1467,140 @@ mod tests {
         .expect("plan");
         assert_eq!(plan.actions[0].status, InitStatus::Overwrite);
         assert_eq!(plan.actions[0].operation, WriteOperation::Write);
+    }
+
+    #[test]
+    fn plan_global_codex_skill_actions_create_canonical_files() {
+        let skills_root = PathBuf::from("/codex/skills");
+        let fs = MemoryInitFileSystem::default();
+
+        let actions = plan_global_codex_skill_actions(&skills_root, false, false, &fs);
+
+        assert_eq!(actions.len(), 2);
+        assert!(actions.iter().all(|action| {
+            action.kind == InitActionKind::Skill
+                && action.agent_name() == Some(GLOBAL_CODEX_AGENT_LABEL)
+                && action.status == InitStatus::Create
+                && action.operation == WriteOperation::Write
+        }));
+        assert_eq!(
+            actions[0].path,
+            PathBuf::from("/codex/skills/qtflow-build-test/SKILL.md")
+        );
+        assert_eq!(
+            actions[1].path,
+            PathBuf::from("/codex/skills/qtflow-build-test/agents/openai.yaml")
+        );
+        assert!(actions[0]
+            .content
+            .as_deref()
+            .expect("skill content")
+            .starts_with("---\nname: qtflow-build-test"));
+        assert!(actions[0]
+            .content
+            .as_deref()
+            .expect("skill content")
+            .contains("qtflow check <test-target>"));
+        assert_eq!(
+            actions[1].content.as_deref(),
+            Some(
+                "interface:\n  display_name: \"QtFlow Build Test\"\n  short_description: \"Build and test Qt/CMake projects through qtflow.\"\n  default_prompt: \"Build and run the focused test for this change with: qtflow check <target>.\"\n"
+            )
+        );
+    }
+
+    #[test]
+    fn plan_global_codex_skill_actions_skip_existing_without_force() {
+        let skills_root = PathBuf::from("/codex/skills");
+        let fs = MemoryInitFileSystem::default()
+            .with_file("/codex/skills/qtflow-build-test/SKILL.md", "custom")
+            .with_file(
+                "/codex/skills/qtflow-build-test/agents/openai.yaml",
+                "custom",
+            );
+
+        let actions = plan_global_codex_skill_actions(&skills_root, false, false, &fs);
+
+        assert!(actions.iter().all(|action| {
+            action.status == InitStatus::SkipExists
+                && action.operation == WriteOperation::None
+                && action.content.is_none()
+        }));
+    }
+
+    #[test]
+    fn plan_global_codex_skill_actions_overwrite_existing_with_force() {
+        let skills_root = PathBuf::from("/codex/skills");
+        let fs = MemoryInitFileSystem::default()
+            .with_file("/codex/skills/qtflow-build-test/SKILL.md", "custom")
+            .with_file(
+                "/codex/skills/qtflow-build-test/agents/openai.yaml",
+                "custom",
+            );
+
+        let actions = plan_global_codex_skill_actions(&skills_root, true, false, &fs);
+
+        assert!(actions.iter().all(|action| {
+            action.status == InitStatus::Overwrite
+                && action.operation == WriteOperation::Write
+                && action.content.is_some()
+        }));
+    }
+
+    #[test]
+    fn plan_global_codex_skill_actions_dry_run_writes_nothing() {
+        let skills_root = PathBuf::from("/codex/skills");
+        let mut fs = MemoryInitFileSystem::default();
+        let before = fs.files().clone();
+        let plan = InitPlan {
+            project_root: root(),
+            detected_agents: DetectedAgents::default(),
+            actions: plan_global_codex_skill_actions(&skills_root, false, true, &fs),
+            warnings: Vec::new(),
+        };
+
+        apply_plan(&plan, &mut fs).expect("apply");
+
+        assert_eq!(fs.files(), &before);
+        assert!(plan
+            .actions
+            .iter()
+            .all(|action| action.status == InitStatus::WouldCreate
+                && action.operation == WriteOperation::None));
+    }
+
+    #[test]
+    fn resolve_codex_skills_root_prefers_codex_home_env() {
+        let env = BTreeMap::from([("CODEX_HOME".to_string(), "/tmp/codex-home".to_string())]);
+
+        let root = resolve_codex_skills_root(&env, Some(Path::new("/home/user"))).expect("root");
+
+        assert_eq!(root, PathBuf::from("/tmp/codex-home/skills"));
+    }
+
+    #[test]
+    fn resolve_codex_skills_root_falls_back_to_injected_home() {
+        let env = BTreeMap::new();
+
+        let root = resolve_codex_skills_root(&env, Some(Path::new("/home/user"))).expect("root");
+
+        assert_eq!(root, PathBuf::from("/home/user/.codex/skills"));
+    }
+
+    #[test]
+    fn action_agent_names_support_custom_global_label() {
+        let fs = MemoryInitFileSystem::default();
+        let plan = InitPlan {
+            project_root: root(),
+            detected_agents: DetectedAgents::default(),
+            actions: plan_global_codex_skill_actions(Path::new("/codex/skills"), false, false, &fs),
+            warnings: Vec::new(),
+        };
+
+        assert_eq!(
+            action_agent_names(&plan),
+            vec![GLOBAL_CODEX_AGENT_LABEL, GLOBAL_CODEX_AGENT_LABEL]
+        );
     }
 
     #[test]

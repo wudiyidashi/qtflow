@@ -23,6 +23,10 @@ fn fixture_repo() -> tempfile::TempDir {
     temp
 }
 
+fn empty_dir() -> tempfile::TempDir {
+    tempfile::tempdir().expect("tempdir")
+}
+
 fn write_cache(root: &std::path::Path, dir: &str, build_type: &str, generator: &str) {
     write_cache_with_prefix(root, dir, build_type, generator, "");
 }
@@ -124,6 +128,175 @@ fn init_json_creates_detected_claude_skill_and_config_then_rerun_skips() {
         .unwrap()
         .iter()
         .all(|action| action["status"] == "skipped"));
+}
+
+#[test]
+fn init_global_json_without_project_creates_codex_skill_and_rerun_skips() {
+    let cwd = empty_dir();
+    let codex_home = empty_dir();
+
+    let output = clean_qtflow()
+        .current_dir(cwd.path())
+        .env("CODEX_HOME", codex_home.path())
+        .args(["--project", cwd.path().to_str().unwrap()])
+        .args(["init", "--global", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+
+    let skill = codex_home.path().join("skills/qtflow-build-test/SKILL.md");
+    let metadata = codex_home
+        .path()
+        .join("skills/qtflow-build-test/agents/openai.yaml");
+    assert!(skill.is_file());
+    assert!(metadata.is_file());
+    assert_eq!(json["actions"].as_array().expect("actions").len(), 2);
+    assert!(json["actions"].as_array().unwrap().iter().all(|action| {
+        action["kind"] == "skill"
+            && action["agent"] == "codex-global"
+            && action["status"] == "created"
+            && !action["path"].as_str().unwrap().contains('\\')
+    }));
+    assert!(json["warnings"][0]
+        .as_str()
+        .expect("warning")
+        .contains("skipped repo-scoped init actions"));
+    assert!(std::fs::read_to_string(&skill)
+        .expect("skill")
+        .starts_with("---\nname: qtflow-build-test"));
+    assert_eq!(
+        std::fs::read_to_string(&metadata).expect("metadata"),
+        "interface:\n  display_name: \"QtFlow Build Test\"\n  short_description: \"Build and test Qt/CMake projects through qtflow.\"\n  default_prompt: \"Build and run the focused test for this change with: qtflow check <target>.\"\n"
+    );
+
+    let rerun = clean_qtflow()
+        .current_dir(cwd.path())
+        .env("CODEX_HOME", codex_home.path())
+        .args(["--project", cwd.path().to_str().unwrap()])
+        .args(["init", "--global", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rerun_json: Value = serde_json::from_slice(&rerun).expect("valid JSON");
+    assert!(rerun_json["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|action| action["status"] == "skipped"));
+}
+
+#[test]
+fn init_global_force_overwrites_existing_codex_skill() {
+    let cwd = empty_dir();
+    let codex_home = empty_dir();
+    let skill_dir = codex_home.path().join("skills/qtflow-build-test");
+    std::fs::create_dir_all(skill_dir.join("agents")).expect("skill dirs");
+    std::fs::write(skill_dir.join("SKILL.md"), "custom skill\n").expect("skill fixture");
+    std::fs::write(skill_dir.join("agents/openai.yaml"), "custom metadata\n")
+        .expect("metadata fixture");
+
+    let output = clean_qtflow()
+        .current_dir(cwd.path())
+        .env("CODEX_HOME", codex_home.path())
+        .args(["init", "--global", "--force", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+
+    assert!(json["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|action| action["status"] == "overwritten"));
+    assert!(std::fs::read_to_string(skill_dir.join("SKILL.md"))
+        .expect("skill")
+        .starts_with("---\nname: qtflow-build-test"));
+    assert!(
+        std::fs::read_to_string(skill_dir.join("agents/openai.yaml"))
+            .expect("metadata")
+            .contains("display_name: \"QtFlow Build Test\"")
+    );
+}
+
+#[test]
+fn init_global_dry_run_writes_nothing_under_codex_home() {
+    let cwd = empty_dir();
+    let codex_home = empty_dir();
+
+    let output = clean_qtflow()
+        .current_dir(cwd.path())
+        .env("CODEX_HOME", codex_home.path())
+        .args(["--dry-run", "init", "--global", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+
+    assert!(json["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|action| action["status"] == "would_create"));
+    assert!(!codex_home.path().join("skills").exists());
+}
+
+#[test]
+fn init_without_global_does_not_write_under_codex_home() {
+    let temp = fixture_repo();
+    let codex_home = empty_dir();
+
+    clean_qtflow()
+        .args(["--project", temp.path().to_str().unwrap()])
+        .env("CODEX_HOME", codex_home.path())
+        .args(["init", "--json"])
+        .assert()
+        .success();
+
+    assert!(!codex_home.path().join("skills").exists());
+}
+
+#[test]
+fn init_global_with_project_creates_repo_and_global_actions() {
+    let temp = fixture_repo();
+    std::fs::create_dir(temp.path().join(".claude")).expect("create .claude");
+    let codex_home = empty_dir();
+
+    let output = clean_qtflow()
+        .args(["--project", temp.path().to_str().unwrap()])
+        .env("CODEX_HOME", codex_home.path())
+        .args(["init", "--global", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+
+    assert!(temp
+        .path()
+        .join(".claude/skills/qtflow-build-test/SKILL.md")
+        .is_file());
+    assert!(temp.path().join(".qtflow.toml").is_file());
+    assert!(codex_home
+        .path()
+        .join("skills/qtflow-build-test/SKILL.md")
+        .is_file());
+    assert_eq!(json["actions"].as_array().expect("actions").len(), 4);
+    assert!(json["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|action| action["agent"] == "codex-global"));
 }
 
 #[test]

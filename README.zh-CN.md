@@ -101,13 +101,15 @@ qtflow init --build-dir-debug out/build/debug      # 显式指定
 
 ## AI 代理集成
 
-`qtflow init` 把 `qtflow-build-test` skill 注入项目里已存在的代理:
+`qtflow init` 把 repo-scoped 的 `qtflow-build-test` 指引注入项目里已存在的代理:
 
 - Claude → `.claude/skills/qtflow-build-test/SKILL.md`
 - Codex → `AGENTS.md`(BEGIN/END 受管段,保留你原有内容)
 - Cursor → `.cursor/rules/qtflow-build-test.mdc`
 
-默认自动探测;也可 `--agent claude|codex|cursor|all` 指定,`--dry-run` 预览、`--force` 覆盖。这样任意 Qt/CMake 仓库里的 AI 代理都会自动改用 `qtflow` 而不是裸 `cmake`。
+Codex 只会从全局 skills 目录自动加载真正可复用的 skill,不会从项目里的 `.codex/skills/` 自动加载。用 `qtflow init --global` 安装全局 Codex skill 到 `$CODEX_HOME/skills/qtflow-build-test/`,未设置 `CODEX_HOME` 时默认是 `~/.codex/skills/qtflow-build-test/`;它会写入 `SKILL.md` 和 `agents/openai.yaml`,安装后重启 Codex 生效。
+
+默认自动探测;也可 `--agent claude|codex|cursor|all` 指定,`--global` 额外安装全局 Codex skill,`--dry-run` 预览、`--force` 覆盖。这样任意 Qt/CMake 仓库里的 AI 代理都会自动改用 `qtflow` 而不是裸 `cmake`。
 
 ## 诊断
 

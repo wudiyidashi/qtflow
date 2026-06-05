@@ -23,8 +23,9 @@ use crate::core::diagnostics::{
     exit_code_override, CommandKind, DiagnosticContext, Engine, Platform,
 };
 use crate::core::init::{
-    apply_plan as apply_init_plan, detect_agents, init_json_report, Agent, AgentSelection,
-    InitAction, InitConfigInputs, InitLayout, InitOptions, RealInitFileSystem,
+    apply_plan as apply_init_plan, detect_agents, init_json_report,
+    plan_global_codex_skill_actions, resolve_codex_skills_root, Agent, AgentSelection, InitAction,
+    InitConfigInputs, InitLayout, InitOptions, RealInitFileSystem,
 };
 use crate::core::path::{path_to_slash, serialize_optional_path, serialize_path};
 use crate::core::plan::{CommandPlan, EnvironmentBootstrap};
@@ -76,6 +77,7 @@ pub struct InitInvocation {
     pub agents: Vec<AgentSelection>,
     pub all: bool,
     pub force: bool,
+    pub global: bool,
     pub no_config: bool,
     pub config_only: bool,
     pub layout: Option<InitLayout>,
@@ -187,6 +189,7 @@ impl From<InitArgs> for InitInvocation {
             agents: args.agent.into_iter().map(AgentSelection::from).collect(),
             all: args.all,
             force: args.force,
+            global: args.global,
             no_config: args.no_config,
             config_only: args.config_only,
             layout: args.layout.map(InitLayout::from),
@@ -690,15 +693,16 @@ fn run_init(global: &GlobalInvocation, args: &InitInvocation) -> Result<(), Qtfl
     let start = global.project.clone().unwrap_or(
         std::env::current_dir().map_err(|err| QtflowError::ConfigOrArg(err.to_string()))?,
     );
-    let project = discover_root(&start)?;
-    let mut fs = RealInitFileSystem;
-    let detected = detect_agents(&project.root, &fs);
-    let presets = cmake::list_preset_infos(&project.root).unwrap_or_default();
-    let discovered_build_dirs = discover_build_dirs(&project.root, &DiscoverOptions::default());
-    let inputs = InitConfigInputs {
-        discovered_build_dirs,
-        presets,
+    let project = match discover_root(&start) {
+        Ok(project) => Some(project),
+        Err(QtflowError::ProjectRootNotFound { .. }) if args.global => None,
+        Err(err) => return Err(err),
     };
+    let mut fs = RealInitFileSystem;
+    let detected = project
+        .as_ref()
+        .map(|project| detect_agents(&project.root, &fs))
+        .unwrap_or_default();
     let opts = InitOptions {
         agents: args.agents.clone(),
         all: args.all,
@@ -710,8 +714,38 @@ fn run_init(global: &GlobalInvocation, args: &InitInvocation) -> Result<(), Qtfl
         build_dir_debug: args.build_dir_debug.clone(),
         build_dir_release: args.build_dir_release.clone(),
     };
-    let mut plan = crate::core::init::plan_actions(&project.root, &opts, &detected, &fs, &inputs)
-        .map_err(|err| QtflowError::ConfigOrArg(err.to_string()))?;
+    let mut plan = if let Some(project) = &project {
+        let presets = cmake::list_preset_infos(&project.root).unwrap_or_default();
+        let discovered_build_dirs = discover_build_dirs(&project.root, &DiscoverOptions::default());
+        let inputs = InitConfigInputs {
+            discovered_build_dirs,
+            presets,
+        };
+        crate::core::init::plan_actions(&project.root, &opts, &detected, &fs, &inputs)
+            .map_err(|err| QtflowError::ConfigOrArg(err.to_string()))?
+    } else {
+        crate::core::init::InitPlan {
+            project_root: start.clone(),
+            detected_agents: detected.clone(),
+            actions: Vec::new(),
+            warnings: vec![format!(
+                "project root not found from {}; skipped repo-scoped init actions",
+                path_to_slash(&start)
+            )],
+        }
+    };
+
+    if args.global {
+        let env = collect_env();
+        let skills_root = resolve_codex_skills_root(&env, None)
+            .map_err(|err| QtflowError::ConfigOrArg(err.to_string()))?;
+        plan.actions.extend(plan_global_codex_skill_actions(
+            &skills_root,
+            args.force,
+            global.dry_run,
+            &fs,
+        ));
+    }
 
     if !global.dry_run {
         let applied = apply_init_plan(&plan, &mut fs).map_err(|err| {
@@ -731,6 +765,9 @@ fn run_init(global: &GlobalInvocation, args: &InitInvocation) -> Result<(), Qtfl
         if should_print_agent_hint(args, &plan.detected_agents) {
             println!("hint: no agents detected; use --agent claude, --agent codex, --agent cursor, or --all");
         }
+        if args.global && !global.dry_run && global_install_changed(&plan.actions) {
+            println!("Restart Codex to pick up the new skill.");
+        }
     }
 
     Ok(())
@@ -741,6 +778,7 @@ fn should_print_agent_hint(
     detected: &crate::core::init::DetectedAgents,
 ) -> bool {
     !args.all
+        && !args.global
         && !args.config_only
         && args.agents.is_empty()
         && !detected.claude
@@ -759,8 +797,8 @@ fn print_init_text(
     }
     for action in actions {
         let target = action
-            .agent
-            .map(|agent| format!("{} ", agent.name()))
+            .agent_name()
+            .map(|agent| format!("{agent} "))
             .unwrap_or_default();
         println!(
             "{}{}: {}",
@@ -772,6 +810,16 @@ fn print_init_text(
     for warning in warnings {
         println!("warning: {warning}");
     }
+}
+
+fn global_install_changed(actions: &[InitAction]) -> bool {
+    actions.iter().any(|action| {
+        action.agent_name() == Some(crate::core::init::GLOBAL_CODEX_AGENT_LABEL)
+            && matches!(
+                action.status,
+                crate::core::init::InitStatus::Create | crate::core::init::InitStatus::Overwrite
+            )
+    })
 }
 
 fn detected_agents_display(detected: &crate::core::init::DetectedAgents) -> String {

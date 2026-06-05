@@ -128,6 +128,12 @@ pub struct InitArgs {
     #[arg(long, help = "Overwrite existing qtflow-managed files")]
     pub force: bool,
 
+    #[arg(
+        long,
+        help = "Also install qtflow as a global Codex skill under $CODEX_HOME/skills (default ~/.codex/skills), discoverable by Codex across all projects."
+    )]
+    pub global: bool,
+
     #[arg(long = "no-config", help = "Do not create .qtflow.toml")]
     pub no_config: bool,
 

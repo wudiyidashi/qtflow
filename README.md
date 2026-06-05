@@ -104,13 +104,14 @@ Key options:
 
 ### init
 
-Creates `.qtflow.toml` and installs the `qtflow-build-test` agent skill for detected agents. It auto-detects Claude (`.claude`), Codex (`AGENTS.md` or `.codex`), and Cursor (`.cursor`).
+Creates `.qtflow.toml` and installs repo-scoped `qtflow-build-test` guidance for detected agents. It auto-detects Claude (`.claude`), Codex (`AGENTS.md` or `.codex`), and Cursor (`.cursor`). Add `--global` to also install the real reusable Codex skill under `$CODEX_HOME/skills/qtflow-build-test/` (default `~/.codex/skills/qtflow-build-test/`).
 
 ```powershell
 qtflow init
 qtflow init --agent codex
 qtflow init --agent claude --agent cursor
 qtflow init --all
+qtflow init --global
 qtflow init --config-only --dry-run --json
 ```
 
@@ -118,6 +119,7 @@ Key options:
 
 - `--agent <claude|codex|cursor|all>`: select agent skill targets; repeatable.
 - `--all`: install all supported agent skill files.
+- `--global`: also install the global Codex skill. This can run without a project root.
 - `--force`: overwrite existing qtflow-managed files.
 - `--no-config`: skip `.qtflow.toml`.
 - `--config-only`: create only `.qtflow.toml`.
@@ -390,13 +392,15 @@ Use `--no-msvc-bootstrap` when you are already inside a Visual Studio Developer 
 
 ## Agent Integration
 
-`qtflow init` installs the `qtflow-build-test` skill so agents use qtflow instead of reconstructing raw CMake, CTest, or Visual Studio Developer Prompt commands.
+`qtflow init` installs `qtflow-build-test` guidance so agents use qtflow instead of reconstructing raw CMake, CTest, or Visual Studio Developer Prompt commands.
 
-Targets:
+Repo-scoped targets:
 
 - Claude: `.claude/skills/qtflow-build-test/SKILL.md`
 - Codex: managed `qtflow-build-test` section in `AGENTS.md`
 - Cursor: `.cursor/rules/qtflow-build-test.mdc`
+
+Codex only auto-loads skills from the global skills directory. Use `qtflow init --global` to install the canonical global skill at `$CODEX_HOME/skills/qtflow-build-test/` or `~/.codex/skills/qtflow-build-test/` when `CODEX_HOME` is unset. It writes `SKILL.md` and `agents/openai.yaml`; restart Codex after installation.
 
 Examples:
 
@@ -404,6 +408,7 @@ Examples:
 qtflow init
 qtflow init --agent codex
 qtflow init --agent claude --agent cursor
+qtflow init --global
 qtflow init --all --dry-run --json
 ```
 
