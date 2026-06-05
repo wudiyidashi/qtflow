@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate-version:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Cargo.toml is the single source of truth. Tags must be v<version>.
+      - name: Guard tag version matches Cargo.toml
+        id: version
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
+          $versionLine = Get-Content Cargo.toml | Select-String -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+
+          if (-not $versionLine) {
+            throw "Could not find package.version in Cargo.toml"
+          }
+
+          $cargoVersion = $versionLine.Matches[0].Groups[1].Value
+          if ($tagVersion -ne $cargoVersion) {
+            throw "Tag ${{ github.ref_name }} does not match Cargo.toml version $cargoVersion"
+          }
+
+          "version=$cargoVersion" >> $env:GITHUB_OUTPUT
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: validate-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: qtflow.exe
+            archive_ext: zip
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: qtflow
+            archive_ext: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: qtflow
+            archive_ext: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            binary: qtflow
+            archive_ext: tar.gz
+
+    env:
+      VERSION: ${{ needs.validate-version.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      BINARY_NAME: ${{ matrix.binary }}
+      ARCHIVE_EXT: ${{ matrix.archive_ext }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Each archive contains the qtflow binary plus README.md and LICENSE when present.
+      - name: Package archive and checksum
+        shell: pwsh
+        run: |
+          $archiveBase = "qtflow-$env:VERSION-$env:TARGET"
+          $stageRoot = Join-Path $env:RUNNER_TEMP $archiveBase
+          New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
+
+          $sourceBinary = Join-Path (Join-Path (Join-Path "target" $env:TARGET) "release") $env:BINARY_NAME
+          if (-not (Test-Path $sourceBinary)) {
+            throw "Missing built binary: $sourceBinary"
+          }
+
+          Copy-Item $sourceBinary (Join-Path $stageRoot $env:BINARY_NAME)
+          Copy-Item README.md (Join-Path $stageRoot "README.md")
+          if (Test-Path LICENSE) {
+            Copy-Item LICENSE (Join-Path $stageRoot "LICENSE")
+          }
+
+          if ($env:ARCHIVE_EXT -eq "zip") {
+            $archive = "$archiveBase.zip"
+            Compress-Archive -Path (Join-Path $stageRoot "*") -DestinationPath $archive -Force
+          } else {
+            $archive = "$archiveBase.tar.gz"
+            tar -czf $archive -C $stageRoot .
+          }
+
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content -NoNewline -Encoding ascii "$archive.sha256"
+
+      - name: Upload packaged asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            qtflow-${{ env.VERSION }}-${{ matrix.target }}.zip
+            qtflow-${{ env.VERSION }}-${{ matrix.target }}.zip.sha256
+            qtflow-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+            qtflow-${{ env.VERSION }}-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Upload GitHub Release assets
+    needs:
+      - validate-version
+      - build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download packaged assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Upload archives and checksums
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

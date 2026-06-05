@@ -1,0 +1,23 @@
+{
+  "name": "@qtflow/cli-darwin-x64",
+  "version": "0.1.0",
+  "description": "Prebuilt qtflow CLI binary for macOS x64.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/qtflow.git"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "bin": {
+    "qtflow": "bin/qtflow"
+  },
+  "files": [
+    "bin/qtflow",
+    "README.md"
+  ]
+}

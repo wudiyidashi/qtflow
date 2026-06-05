@@ -1,0 +1,26 @@
+{
+  "name": "qtflow",
+  "version": "0.1.0",
+  "description": "A Qt/CMake workflow CLI for configure, build, test, and check commands.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/qtflow.git"
+  },
+  "bin": {
+    "qtflow": "bin/qtflow.js"
+  },
+  "files": [
+    "bin/qtflow.js",
+    "README.md"
+  ],
+  "optionalDependencies": {
+    "@qtflow/cli-win32-x64": "0.1.0",
+    "@qtflow/cli-linux-x64": "0.1.0",
+    "@qtflow/cli-darwin-x64": "0.1.0",
+    "@qtflow/cli-darwin-arm64": "0.1.0"
+  },
+  "engines": {
+    "node": ">=14"
+  }
+}

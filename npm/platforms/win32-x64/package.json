@@ -1,0 +1,23 @@
+{
+  "name": "@qtflow/cli-win32-x64",
+  "version": "0.1.0",
+  "description": "Prebuilt qtflow CLI binary for Windows x64.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/qtflow.git"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "bin": {
+    "qtflow": "bin/qtflow.exe"
+  },
+  "files": [
+    "bin/qtflow.exe",
+    "README.md"
+  ]
+}

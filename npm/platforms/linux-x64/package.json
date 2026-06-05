@@ -1,0 +1,23 @@
+{
+  "name": "@qtflow/cli-linux-x64",
+  "version": "0.1.0",
+  "description": "Prebuilt qtflow CLI binary for Linux x64.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/qtflow.git"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "bin": {
+    "qtflow": "bin/qtflow"
+  },
+  "files": [
+    "bin/qtflow",
+    "README.md"
+  ]
+}

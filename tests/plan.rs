@@ -1,0 +1,340 @@
+use assert_cmd::Command;
+use predicates::prelude::*;
+use serde_json::Value;
+
+fn fixture_project() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.20)\n",
+    )
+    .expect("write CMakeLists");
+    std::fs::write(
+        temp.path().join(".qtflow.toml"),
+        r#"
+default_profile = "debug"
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+ctest_args = []
+
+[msvc]
+enabled = false
+"#,
+    )
+    .expect("write config");
+    temp
+}
+
+fn fixture_project_with_config(config: &str) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.20)\n",
+    )
+    .expect("write CMakeLists");
+    std::fs::write(temp.path().join(".qtflow.toml"), config).expect("write config");
+    temp
+}
+
+fn qtflow_json(args: &[&str]) -> Value {
+    let output = Command::cargo_bin("qtflow")
+        .expect("binary")
+        .env_remove("QTFLOW_CONFIG")
+        .env_remove("QTFLOW_PROFILE")
+        .env_remove("QTFLOW_CMAKE")
+        .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_VSDEVCMD_BAT")
+        .env_remove("VSDEVCMD_BAT")
+        .args(args)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    serde_json::from_slice(&output).expect("valid JSON")
+}
+
+#[test]
+fn plan_check_json_matches_contract_shape() {
+    let temp = fixture_project();
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&["--project", project, "plan", "check", "foo", "--json"]);
+    let root = json["projectRoot"].as_str().expect("project root");
+    let build_dir = format!("{root}/out/build/debug");
+
+    assert_eq!(json["profile"], "debug");
+    assert_eq!(json["steps"].as_array().expect("steps").len(), 2);
+    assert_eq!(json["steps"][0]["label"], "build");
+    assert_eq!(json["steps"][0]["cwd"], root);
+    assert_eq!(json["steps"][0]["program"], "cmake");
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!(["--build", build_dir, "--target", "foo"])
+    );
+    assert_eq!(json["steps"][1]["label"], "test");
+    assert_eq!(json["steps"][1]["cwd"], root);
+    assert_eq!(json["steps"][1]["program"], "ctest");
+    assert_eq!(
+        json["steps"][1]["args"],
+        serde_json::json!([
+            "--test-dir",
+            format!("{root}/out/build/debug"),
+            "-R",
+            "foo",
+            "--output-on-failure"
+        ])
+    );
+    assert!(json["steps"][0].get("bootstrap").is_none());
+    assert!(json["steps"][1].get("bootstrap").is_none());
+
+    let text = serde_json::to_string(&json).expect("json text");
+    assert!(
+        !text.contains('\\'),
+        "plan JSON paths should use slashes: {text}"
+    );
+}
+
+#[test]
+fn check_dry_run_json_matches_plan_json() {
+    let temp = fixture_project();
+    let project = temp.path().to_str().unwrap();
+
+    let plan = qtflow_json(&["--project", project, "plan", "check", "foo", "--json"]);
+    let dry_run = qtflow_json(&["--project", project, "check", "foo", "--dry-run", "--json"]);
+
+    assert_eq!(dry_run, plan);
+}
+
+#[test]
+fn build_config_name_adds_cmake_build_config_arg() {
+    let temp = fixture_project();
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&[
+        "--project",
+        project,
+        "plan",
+        "build",
+        "foo",
+        "--config-name",
+        "Debug",
+        "--json",
+    ]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!([
+            "--build",
+            format!("{root}/out/build/debug"),
+            "--config",
+            "Debug",
+            "--target",
+            "foo"
+        ])
+    );
+}
+
+#[test]
+fn test_config_name_adds_ctest_config_arg() {
+    let temp = fixture_project();
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&[
+        "--project",
+        project,
+        "plan",
+        "test",
+        "smoke",
+        "--config-name",
+        "Release",
+        "--json",
+    ]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!([
+            "--test-dir",
+            format!("{root}/out/build/debug"),
+            "-C",
+            "Release",
+            "-R",
+            "smoke",
+            "--output-on-failure"
+        ])
+    );
+}
+
+#[test]
+fn check_config_name_adds_build_and_ctest_config_args() {
+    let temp = fixture_project();
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&[
+        "--project",
+        project,
+        "plan",
+        "check",
+        "foo",
+        "--config-name",
+        "Debug",
+        "--json",
+    ]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!([
+            "--build",
+            format!("{root}/out/build/debug"),
+            "--config",
+            "Debug",
+            "--target",
+            "foo"
+        ])
+    );
+    assert_eq!(
+        json["steps"][1]["args"],
+        serde_json::json!([
+            "--test-dir",
+            format!("{root}/out/build/debug"),
+            "-C",
+            "Debug",
+            "-R",
+            "foo",
+            "--output-on-failure"
+        ])
+    );
+}
+
+#[test]
+fn profile_config_name_is_used_and_cli_overrides_it() {
+    let temp = fixture_project_with_config(
+        r#"
+default_profile = "debug"
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+config_name = "Debug"
+ctest_args = []
+
+[msvc]
+enabled = false
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let profile_json = qtflow_json(&["--project", project, "plan", "check", "foo", "--json"]);
+    assert_eq!(profile_json["steps"][0]["args"][2], "--config");
+    assert_eq!(profile_json["steps"][0]["args"][3], "Debug");
+    assert_eq!(profile_json["steps"][1]["args"][2], "-C");
+    assert_eq!(profile_json["steps"][1]["args"][3], "Debug");
+
+    let cli_json = qtflow_json(&[
+        "--project",
+        project,
+        "plan",
+        "check",
+        "foo",
+        "--config-name",
+        "Release",
+        "--json",
+    ]);
+    assert_eq!(cli_json["steps"][0]["args"][3], "Release");
+    assert_eq!(cli_json["steps"][1]["args"][3], "Release");
+}
+
+#[test]
+fn configure_without_preset_or_generator_exits_2() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.20)\n",
+    )
+    .expect("write CMakeLists");
+    std::fs::write(
+        temp.path().join(".qtflow.toml"),
+        r#"
+default_profile = "custom"
+
+[profiles.custom]
+preset = ""
+build_dir = "out/build/custom"
+"#,
+    )
+    .expect("write config");
+
+    Command::cargo_bin("qtflow")
+        .expect("binary")
+        .env_remove("QTFLOW_CONFIG")
+        .env_remove("QTFLOW_PROFILE")
+        .env_remove("QTFLOW_CMAKE")
+        .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_VSDEVCMD_BAT")
+        .env_remove("VSDEVCMD_BAT")
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["plan", "configure"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "no CMake preset or generator configured for profile 'custom'",
+        ))
+        .stderr(predicate::str::contains(
+            "set profiles.custom.preset or profiles.custom.generator, or pass --preset/--generator",
+        ));
+}
+
+#[test]
+fn configure_with_file_defined_generator_omitting_preset_plans_explicit_configure() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.20)\n",
+    )
+    .expect("write CMakeLists");
+    std::fs::write(
+        temp.path().join(".qtflow.toml"),
+        r#"
+default_profile = "debug"
+
+[profiles.debug]
+build_dir = "build"
+generator = "Ninja"
+ctest_args = ["--output-on-failure"]
+
+[msvc]
+enabled = false
+"#,
+    )
+    .expect("write config");
+
+    let output = Command::cargo_bin("qtflow")
+        .expect("binary")
+        .env_remove("QTFLOW_CONFIG")
+        .env_remove("QTFLOW_PROFILE")
+        .env_remove("QTFLOW_CMAKE")
+        .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_VSDEVCMD_BAT")
+        .env_remove("VSDEVCMD_BAT")
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["plan", "configure", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+    let root = json["projectRoot"].as_str().expect("project root");
+    assert_eq!(json["steps"][0]["program"], "cmake");
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!(["-S", root, "-B", format!("{root}/build"), "-G", "Ninja"])
+    );
+}

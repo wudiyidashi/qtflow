@@ -1,0 +1,3 @@
+target/
+dist/
+npm/platforms/*/bin/
