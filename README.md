@@ -1,5 +1,7 @@
 # qtflow
 
+**English** | [中文](README.zh-CN.md)
+
 qtflow is a Rust CLI for Qt/CMake projects that standardizes the everyday `configure`, `build`, `test`, and `check` workflow. It shells out to CMake and CTest, discovers project/config/build-directory context, and auto-initializes the MSVC developer environment on Windows when needed. It is not a replacement for CMake, CTest, Qt Creator, or Visual Studio; it is a thin, predictable workflow layer for humans and coding agents.
 
 ## Install

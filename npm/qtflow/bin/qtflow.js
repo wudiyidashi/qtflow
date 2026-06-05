@@ -30,7 +30,7 @@ function installHelp(platform, arch) {
     "Install from a GitHub release archive, or build from source with:",
     "  cargo install qtflow",
     "",
-    "GitHub releases: https://github.com/OWNER/qtflow/releases",
+    "GitHub releases: https://github.com/wudiyidashi/qtflow/releases",
   ].join("\n");
 }
 
@@ -62,7 +62,7 @@ function resolveBinary(platform = process.platform, arch = process.arch, require
         "Install from a GitHub release archive, or build from source with:",
         "  cargo install qtflow",
         "",
-        "GitHub releases: https://github.com/OWNER/qtflow/releases",
+        "GitHub releases: https://github.com/wudiyidashi/qtflow/releases",
       ].join("\n"),
       cause: error,
     };
