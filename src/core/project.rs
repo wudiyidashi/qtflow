@@ -89,6 +89,10 @@ fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
 mod tests {
     use super::*;
 
+    fn canonicalize(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).expect("canonical path")
+    }
+
     #[test]
     fn discovers_project_root_from_child_directory() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -100,9 +104,15 @@ mod tests {
 
         let ctx = discover_root(&child).expect("project context");
 
-        assert_eq!(ctx.root, temp.path());
-        assert_eq!(ctx.config_file, Some(ctx.root.join("qtflow.toml")));
-        assert_eq!(ctx.presets_file, Some(ctx.root.join("CMakePresets.json")));
+        assert_eq!(canonicalize(&ctx.root), canonicalize(temp.path()));
+        assert_eq!(
+            ctx.config_file.as_deref().map(canonicalize),
+            Some(canonicalize(&temp.path().join("qtflow.toml")))
+        );
+        assert_eq!(
+            ctx.presets_file.as_deref().map(canonicalize),
+            Some(canonicalize(&temp.path().join("CMakePresets.json")))
+        );
     }
 
     #[test]

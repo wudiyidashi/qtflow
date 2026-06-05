@@ -1,5 +1,13 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Copy)]
+enum CmakeStub {
+    Success,
+    Exit17,
+    BuildDirMissing,
+}
 
 fn fixture_project(config: &str) -> tempfile::TempDir {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -10,6 +18,74 @@ fn fixture_project(config: &str) -> tempfile::TempDir {
     .expect("write CMakeLists");
     std::fs::write(temp.path().join(".qtflow.toml"), config).expect("write config");
     temp
+}
+
+fn fixture_project_with_cmake_stub(stub: CmakeStub) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.20)\n",
+    )
+    .expect("write CMakeLists");
+    let cmake = write_cmake_stub(temp.path(), stub);
+    std::fs::write(
+        temp.path().join(".qtflow.toml"),
+        format!(
+            r#"
+[tools]
+cmake = {}
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "unused"
+build_dir = "out/build/debug"
+"#,
+            toml_basic_string(&cmake.to_string_lossy())
+        ),
+    )
+    .expect("write config");
+    temp
+}
+
+#[cfg(windows)]
+fn write_cmake_stub(root: &Path, stub: CmakeStub) -> PathBuf {
+    let path = root.join("qtflow-cmake-stub.cmd");
+    let script = match stub {
+        CmakeStub::Success => "@echo off\r\nexit /b 0\r\n",
+        CmakeStub::Exit17 => "@echo off\r\nexit /b 17\r\n",
+        CmakeStub::BuildDirMissing => {
+            "@echo off\r\necho Error: could not load cache 1>&2\r\nexit /b 17\r\n"
+        }
+    };
+    std::fs::write(&path, script).expect("write cmake stub");
+    path
+}
+
+#[cfg(not(windows))]
+fn write_cmake_stub(root: &Path, stub: CmakeStub) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = root.join("qtflow-cmake-stub");
+    let script = match stub {
+        CmakeStub::Success => "#!/bin/sh\nexit 0\n",
+        CmakeStub::Exit17 => "#!/bin/sh\nexit 17\n",
+        CmakeStub::BuildDirMissing => {
+            "#!/bin/sh\necho 'Error: could not load cache' >&2\nexit 17\n"
+        }
+    };
+    std::fs::write(&path, script).expect("write cmake stub");
+    let mut permissions = std::fs::metadata(&path)
+        .expect("cmake stub metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).expect("make cmake stub executable");
+    path
+}
+
+fn toml_basic_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn clean_qtflow() -> Command {
@@ -24,120 +100,36 @@ fn clean_qtflow() -> Command {
     command
 }
 
-#[cfg(windows)]
-const SUCCESS_CONFIG: &str = r#"
-[tools]
-cmake = "cmd"
-
-[msvc]
-enabled = false
-
-[profiles.debug]
-preset = "unused"
-build_dir = "out/build/debug"
-build_args = ["/d", "/s", "/c", "exit 0"]
-"#;
-
-#[cfg(not(windows))]
-const SUCCESS_CONFIG: &str = r#"
-[tools]
-cmake = "sh"
-
-[msvc]
-enabled = false
-
-[profiles.debug]
-preset = "unused"
-build_dir = "out/build/debug"
-build_args = ["-c", "exit 0"]
-"#;
-
-#[cfg(windows)]
-const FAILURE_CONFIG: &str = r#"
-[tools]
-cmake = "cmd"
-
-[msvc]
-enabled = false
-
-[profiles.debug]
-preset = "unused"
-build_dir = "out/build/debug"
-build_args = ["/d", "/s", "/c", "exit 17"]
-"#;
-
-#[cfg(not(windows))]
-const FAILURE_CONFIG: &str = r#"
-[tools]
-cmake = "sh"
-
-[msvc]
-enabled = false
-
-[profiles.debug]
-preset = "unused"
-build_dir = "out/build/debug"
-build_args = ["-c", "exit 17"]
-"#;
-
 #[test]
 fn build_executes_plan_and_success_exits_zero() {
-    let temp = fixture_project(SUCCESS_CONFIG);
+    let temp = fixture_project_with_cmake_stub(CmakeStub::Success);
 
     clean_qtflow()
         .args(["--project", temp.path().to_str().unwrap()])
-        .args(["build"])
+        .args(["build", "--no-msvc-bootstrap"])
         .assert()
         .success();
 }
 
 #[test]
 fn build_non_zero_child_exit_maps_to_qtflow_exit_one() {
-    let temp = fixture_project(FAILURE_CONFIG);
+    let temp = fixture_project_with_cmake_stub(CmakeStub::Exit17);
 
     clean_qtflow()
         .args(["--project", temp.path().to_str().unwrap()])
-        .args(["build"])
+        .args(["build", "--no-msvc-bootstrap"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("exit code 17"));
 }
 
-#[cfg(windows)]
-const BUILD_DIR_MISSING_CONFIG: &str = r#"
-[tools]
-cmake = "cmd"
-
-[msvc]
-enabled = false
-
-[profiles.debug]
-preset = "unused"
-build_dir = "out/build/debug"
-build_args = ["/d", "/s", "/c", "echo Error: could not load cache 1>&2 && exit 17"]
-"#;
-
-#[cfg(not(windows))]
-const BUILD_DIR_MISSING_CONFIG: &str = r#"
-[tools]
-cmake = "sh"
-
-[msvc]
-enabled = false
-
-[profiles.debug]
-preset = "unused"
-build_dir = "out/build/debug"
-build_args = ["-c", "echo 'Error: could not load cache' >&2; exit 17"]
-"#;
-
 #[test]
 fn build_failure_prints_cmake_build_dir_missing_diagnostic() {
-    let temp = fixture_project(BUILD_DIR_MISSING_CONFIG);
+    let temp = fixture_project_with_cmake_stub(CmakeStub::BuildDirMissing);
 
     clean_qtflow()
         .args(["--project", temp.path().to_str().unwrap()])
-        .args(["build", "foo"])
+        .args(["build", "--no-msvc-bootstrap", "foo"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
@@ -148,10 +140,10 @@ fn build_failure_prints_cmake_build_dir_missing_diagnostic() {
 
 #[test]
 fn build_failure_json_outputs_diagnostics_object() {
-    let temp = fixture_project(BUILD_DIR_MISSING_CONFIG);
+    let temp = fixture_project_with_cmake_stub(CmakeStub::BuildDirMissing);
     let output = clean_qtflow()
         .args(["--project", temp.path().to_str().unwrap()])
-        .args(["build", "foo", "--json"])
+        .args(["build", "--no-msvc-bootstrap", "foo", "--json"])
         .assert()
         .code(1)
         .get_output()
