@@ -4,6 +4,7 @@ pub mod builddir;
 pub mod cmake;
 pub mod ctest;
 pub mod msvc;
+pub mod qmake;
 pub mod qt;
 
 pub trait Probe {

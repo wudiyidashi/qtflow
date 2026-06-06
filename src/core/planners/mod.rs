@@ -7,6 +7,8 @@ use crate::core::plan::{CommandStep, EnvironmentBootstrap};
 pub mod build;
 pub mod check;
 pub mod configure;
+pub mod qmake_build;
+pub mod qmake_configure;
 pub mod test;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +17,7 @@ pub struct PlanContext {
     pub profile: String,
     pub active_profile: PlanProfile,
     pub tools: PlanTools,
+    pub qmake: PlanQmake,
     pub msvc: PlanMsvc,
     pub command: PlanCommand,
 }
@@ -35,6 +38,22 @@ pub struct PlanProfile {
 pub struct PlanTools {
     pub cmake: String,
     pub ctest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanQmake {
+    pub qmake: String,
+    pub spec: String,
+    pub make: String,
+    pub pro_file: PathBuf,
+    pub config: QmakeBuildConfig,
+    pub config_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QmakeBuildConfig {
+    Debug,
+    Release,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,9 +129,19 @@ pub fn bootstrap(ctx: &PlanContext) -> Option<EnvironmentBootstrap> {
 }
 
 fn step(ctx: &PlanContext, label: &str, program: String, args: Vec<String>) -> CommandStep {
+    step_with_cwd(ctx, label, ctx.project_root.clone(), program, args)
+}
+
+fn step_with_cwd(
+    ctx: &PlanContext,
+    label: &str,
+    cwd: PathBuf,
+    program: String,
+    args: Vec<String>,
+) -> CommandStep {
     CommandStep {
         label: label.to_string(),
-        cwd: ctx.project_root.clone(),
+        cwd,
         program,
         args,
         env: ctx.active_profile.env.clone(),
@@ -197,6 +226,14 @@ pub(crate) mod test_support {
             tools: PlanTools {
                 cmake: "cmake".to_string(),
                 ctest: "ctest".to_string(),
+            },
+            qmake: PlanQmake {
+                qmake: "qmake".to_string(),
+                spec: "linux-g++".to_string(),
+                make: "make".to_string(),
+                pro_file: PathBuf::from("/repo/app.pro"),
+                config: QmakeBuildConfig::Debug,
+                config_args: Vec::new(),
             },
             msvc: PlanMsvc {
                 is_windows: false,

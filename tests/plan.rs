@@ -38,6 +38,13 @@ fn fixture_project_with_config(config: &str) -> tempfile::TempDir {
     temp
 }
 
+fn qmake_fixture_project(config: &str) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("app.pro"), "TEMPLATE = app\n").expect("write pro");
+    std::fs::write(temp.path().join(".qtflow.toml"), config).expect("write config");
+    temp
+}
+
 fn qtflow_json(args: &[&str]) -> Value {
     let output = Command::cargo_bin("qtflow")
         .expect("binary")
@@ -45,6 +52,7 @@ fn qtflow_json(args: &[&str]) -> Value {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(args)
@@ -55,6 +63,178 @@ fn qtflow_json(args: &[&str]) -> Value {
         .clone();
 
     serde_json::from_slice(&output).expect("valid JSON")
+}
+
+#[test]
+fn qmake_plan_build_json_uses_make_tool_shape() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[qmake]
+qmake = "qmake-stub"
+spec = "linux-g++"
+make = "make"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+build_args = ["VERBOSE=1"]
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&["--project", project, "plan", "build", "app", "--json"]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(json["steps"][0]["label"], "build");
+    assert_eq!(json["steps"][0]["program"], "make");
+    assert_eq!(json["steps"][0]["cwd"], root);
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!(["-C", format!("{root}/out/build/debug"), "app", "VERBOSE=1"])
+    );
+}
+
+#[test]
+fn qmake_plan_configure_json_uses_qmake_arg_shape() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[qmake]
+qmake = "qmake-stub"
+spec = "linux-g++"
+make = "make"
+config_args = ["-recursive"]
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&["--project", project, "plan", "configure", "--json"]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(json["steps"][0]["program"], "qmake-stub");
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!([
+            "-o",
+            format!("{root}/out/build/debug/Makefile"),
+            format!("{root}/app.pro"),
+            "-spec",
+            "linux-g++",
+            "CONFIG+=debug",
+            "-recursive",
+            "-after",
+            format!("DESTDIR={root}/out/build/debug/bin")
+        ])
+    );
+}
+
+#[test]
+fn qmake_plan_build_with_nmake_uses_build_dir_cwd_without_dash_c() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[qmake]
+qmake = "qmake-stub"
+spec = "win32-msvc"
+make = "nmake"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&["--project", project, "plan", "build", "app", "--json"]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(json["steps"][0]["program"], "nmake");
+    assert_eq!(json["steps"][0]["cwd"], format!("{root}/out/build/debug"));
+    assert_eq!(json["steps"][0]["args"], serde_json::json!(["app"]));
+}
+
+#[test]
+fn qmake_plan_test_is_not_yet_supported() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    );
+
+    Command::cargo_bin("qtflow")
+        .expect("binary")
+        .env_remove("QTFLOW_CONFIG")
+        .env_remove("QTFLOW_PROFILE")
+        .env_remove("QTFLOW_CMAKE")
+        .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
+        .env_remove("QTFLOW_VSDEVCMD_BAT")
+        .env_remove("VSDEVCMD_BAT")
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["plan", "test", "smoke"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "qmake test/check not yet supported (coming in next phase)",
+        ));
+}
+
+#[test]
+fn build_system_cmake_forces_cmake_when_child_has_pro_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("CMakeLists.txt"),
+        "cmake_minimum_required(VERSION 3.20)\n",
+    )
+    .expect("write CMakeLists");
+    std::fs::write(
+        temp.path().join(".qtflow.toml"),
+        r#"
+build_system = "cmake"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+"#,
+    )
+    .expect("write config");
+    let child = temp.path().join("example");
+    std::fs::create_dir_all(&child).expect("child");
+    std::fs::write(child.join("app.pro"), "TEMPLATE = app\n").expect("write pro");
+
+    let json = qtflow_json(&[
+        "--project",
+        child.to_str().unwrap(),
+        "plan",
+        "build",
+        "app",
+        "--json",
+    ]);
+
+    assert_eq!(json["steps"][0]["program"], "cmake");
 }
 
 #[test]
@@ -276,6 +456,7 @@ build_dir = "out/build/custom"
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(["--project", temp.path().to_str().unwrap()])
@@ -320,6 +501,7 @@ enabled = false
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(["--project", temp.path().to_str().unwrap()])

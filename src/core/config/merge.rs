@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::model::{
-    ConfigSource, DiagnosticsConfig, MsvcConfig, Profile, QtConfig, ResolvedConfig, TestPreset,
-    Tools,
+    BuildSystem, ConfigSource, DiagnosticsConfig, MsvcConfig, Profile, QmakeConfig, QtConfig,
+    ResolvedConfig, TestPreset, Tools,
 };
-use super::raw::{RawConfig, RawProfile};
+use super::raw::{RawBuildSystem, RawConfig, RawProfile};
 
 pub const DEFAULT_PROFILE_NAME: &str = "debug";
 pub const DEBUG_PROFILE_NAME: &str = "debug";
@@ -22,6 +22,7 @@ pub struct ConfigOverrides {
     pub profile: Option<String>,
     pub cmake: Option<String>,
     pub ctest: Option<String>,
+    pub qmake: Option<String>,
     pub vsdevcmd: Option<PathBuf>,
     pub msvc_enabled: Option<bool>,
 }
@@ -111,6 +112,7 @@ fn inferred_defaults(project_root: &Path) -> ResolvedConfig {
     ResolvedConfig {
         default_profile: DEFAULT_PROFILE_NAME.to_string(),
         active_profile: DEFAULT_PROFILE_NAME.to_string(),
+        build_system: BuildSystem::Auto,
         tools: Tools {
             cmake: "cmake".to_string(),
             ctest: "ctest".to_string(),
@@ -126,6 +128,13 @@ fn inferred_defaults(project_root: &Path) -> ResolvedConfig {
             root: None,
             bin_dir: None,
         },
+        qmake: QmakeConfig {
+            qmake: None,
+            spec: None,
+            make: None,
+            pro_file: None,
+            config_args: Vec::new(),
+        },
         profiles,
         tests: BTreeMap::new(),
         diagnostics: DiagnosticsConfig {
@@ -139,6 +148,13 @@ fn inferred_defaults(project_root: &Path) -> ResolvedConfig {
 fn apply_file(cfg: &mut ResolvedConfig, raw: RawConfig, project_root: &Path) {
     if let Some(default_profile) = raw.default_profile {
         cfg.default_profile = default_profile;
+    }
+    if let Some(build_system) = raw.build_system {
+        cfg.build_system = match build_system {
+            RawBuildSystem::Auto => BuildSystem::Auto,
+            RawBuildSystem::Cmake => BuildSystem::Cmake,
+            RawBuildSystem::Qmake => BuildSystem::Qmake,
+        };
     }
 
     if let Some(tools) = raw.tools {
@@ -174,6 +190,25 @@ fn apply_file(cfg: &mut ResolvedConfig, raw: RawConfig, project_root: &Path) {
         }
         if let Some(bin_dir) = qt.bin_dir {
             cfg.qt.bin_dir = empty_path_to_none(bin_dir);
+        }
+    }
+
+    if let Some(qmake) = raw.qmake {
+        if let Some(program) = qmake.qmake {
+            cfg.qmake.qmake = empty_string_to_none(program);
+        }
+        if let Some(spec) = qmake.spec {
+            cfg.qmake.spec = empty_string_to_none(spec);
+        }
+        if let Some(make) = qmake.make {
+            cfg.qmake.make = empty_string_to_none(make);
+        }
+        if let Some(pro_file) = qmake.pro_file {
+            cfg.qmake.pro_file =
+                empty_path_to_none(pro_file).map(|path| absolutize(project_root, path));
+        }
+        if let Some(config_args) = qmake.config_args {
+            cfg.qmake.config_args = config_args;
         }
     }
 
@@ -225,6 +260,9 @@ fn apply_cli(cfg: &mut ResolvedConfig, cli: &ConfigOverrides) {
     }
     if let Some(ctest) = &cli.ctest {
         cfg.tools.ctest = ctest.clone();
+    }
+    if let Some(qmake) = &cli.qmake {
+        cfg.qmake.qmake = empty_string_to_none(qmake.clone());
     }
     if let Some(vsdevcmd) = &cli.vsdevcmd {
         cfg.msvc.vsdevcmd = Some(vsdevcmd.clone());
@@ -310,8 +348,13 @@ mod tests {
 
         assert_eq!(cfg.default_profile, "debug");
         assert_eq!(cfg.active_profile, "debug");
+        assert_eq!(cfg.build_system, BuildSystem::Auto);
         assert_eq!(cfg.tools.cmake, "cmake");
         assert_eq!(cfg.tools.ctest, "ctest");
+        assert_eq!(cfg.qmake.qmake, None);
+        assert_eq!(cfg.qmake.spec, None);
+        assert_eq!(cfg.qmake.make, None);
+        assert!(cfg.qmake.config_args.is_empty());
         assert_eq!(cfg.msvc.arch, "x64");
         assert_eq!(
             cfg.profiles["debug"].build_dir,
@@ -377,6 +420,36 @@ mod tests {
         );
 
         assert_eq!(cfg.profiles["debug"].preset.as_deref(), Some("X"));
+    }
+
+    #[test]
+    fn file_defined_qmake_config_resolves_paths_and_empty_auto_values() {
+        let root = PathBuf::from("/repo");
+        let raw = RawConfig {
+            build_system: Some(RawBuildSystem::Qmake),
+            qmake: Some(super::super::raw::RawQmake {
+                qmake: Some("custom-qmake".to_string()),
+                spec: Some("".to_string()),
+                make: Some("nmake".to_string()),
+                pro_file: Some(PathBuf::from("app/app.pro")),
+                config_args: Some(vec!["-recursive".to_string()]),
+            }),
+            ..RawConfig::default()
+        };
+
+        let cfg = resolve(
+            Some(raw),
+            &BTreeMap::new(),
+            &ConfigOverrides::default(),
+            &root,
+        );
+
+        assert_eq!(cfg.build_system, BuildSystem::Qmake);
+        assert_eq!(cfg.qmake.qmake.as_deref(), Some("custom-qmake"));
+        assert_eq!(cfg.qmake.spec, None);
+        assert_eq!(cfg.qmake.make.as_deref(), Some("nmake"));
+        assert_eq!(cfg.qmake.pro_file, Some(PathBuf::from("/repo/app/app.pro")));
+        assert_eq!(cfg.qmake.config_args, vec!["-recursive".to_string()]);
     }
 
     #[test]
@@ -453,6 +526,7 @@ mod tests {
             profile: Some("cli_profile".to_string()),
             cmake: Some("cli-cmake".to_string()),
             ctest: Some("cli-ctest".to_string()),
+            qmake: Some("cli-qmake".to_string()),
             vsdevcmd: Some(PathBuf::from("cli-vsdevcmd.bat")),
             ..ConfigOverrides::default()
         };
@@ -463,6 +537,7 @@ mod tests {
         assert_eq!(cfg.active_profile, "cli_profile");
         assert_eq!(cfg.tools.cmake, "cli-cmake");
         assert_eq!(cfg.tools.ctest, "cli-ctest");
+        assert_eq!(cfg.qmake.qmake.as_deref(), Some("cli-qmake"));
         assert_eq!(cfg.msvc.vsdevcmd, Some(PathBuf::from("cli-vsdevcmd.bat")));
         assert_eq!(
             cfg.profiles["file_profile"].build_dir,
@@ -494,6 +569,7 @@ mod tests {
         assert_eq!(cfg.active_profile, "env_profile");
         assert_eq!(cfg.tools.cmake, "env-cmake");
         assert_eq!(cfg.tools.ctest, "env-ctest");
+        assert_eq!(cfg.qmake.qmake, None);
     }
 
     #[test]

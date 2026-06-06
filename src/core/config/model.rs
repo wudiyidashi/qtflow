@@ -8,13 +8,23 @@ use serde::Serialize;
 pub struct ResolvedConfig {
     pub default_profile: String,
     pub active_profile: String,
+    pub build_system: BuildSystem,
     pub tools: Tools,
     pub msvc: MsvcConfig,
     pub qt: QtConfig,
+    pub qmake: QmakeConfig,
     pub profiles: BTreeMap<String, Profile>,
     pub tests: BTreeMap<String, TestPreset>,
     pub diagnostics: DiagnosticsConfig,
     pub source: ConfigSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildSystem {
+    Auto,
+    Cmake,
+    Qmake,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -44,6 +54,17 @@ pub struct QtConfig {
     pub root: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bin_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QmakeConfig {
+    pub qmake: Option<String>,
+    pub spec: Option<String>,
+    pub make: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pro_file: Option<PathBuf>,
+    pub config_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

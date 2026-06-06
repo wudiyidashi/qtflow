@@ -62,6 +62,7 @@ build_dir = "build/release"
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(["--project", temp.path().to_str().unwrap()])
@@ -82,6 +83,7 @@ build_dir = "build/release"
         temp.path().canonicalize().expect("canonical temp")
     );
     assert_eq!(json["profile"], "release");
+    assert_eq!(json["buildSystem"], "cmake");
     assert_eq!(
         json["selectedProfile"]["preset"],
         Value::String("Qt-Release-Custom".to_string())
@@ -98,6 +100,56 @@ build_dir = "build/release"
             "{pointer} should use forward slashes: {value}"
         );
     }
+}
+
+#[test]
+fn doctor_no_probe_json_reports_qmake_section_for_qmake_project() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("app.pro"), "TEMPLATE = app\n").expect("write pro");
+    std::fs::write(
+        temp.path().join(".qtflow.toml"),
+        r#"
+build_system = "qmake"
+
+[qmake]
+qmake = "qmake-stub"
+spec = "linux-g++"
+make = "make"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    )
+    .expect("write config");
+
+    let output = Command::cargo_bin("qtflow")
+        .expect("binary")
+        .env_remove("QTFLOW_CONFIG")
+        .env_remove("QTFLOW_PROFILE")
+        .env_remove("QTFLOW_CMAKE")
+        .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
+        .env_remove("QTFLOW_VSDEVCMD_BAT")
+        .env_remove("VSDEVCMD_BAT")
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["doctor", "--no-probe", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+    assert_eq!(json["buildSystem"], "qmake");
+    assert_eq!(json["qmake"]["path"], "qmake-stub");
+    assert_eq!(json["qmake"]["status"], "notProbed");
+    assert_eq!(json["qmake"]["source"], "config");
+    assert_eq!(json["qmake"]["spec"], "linux-g++");
+    assert_eq!(json["qmake"]["make"], "make");
+    assert!(json["qmake"].get("version").is_none());
 }
 
 #[test]
@@ -136,6 +188,7 @@ build_dir = "out/build/debug"
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(["--project", temp.path().to_str().unwrap()])
@@ -175,6 +228,7 @@ fn doctor_no_probe_json_reports_discovered_build_dirs_with_roles() {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(["--project", temp.path().to_str().unwrap()])
@@ -218,6 +272,7 @@ fn doctor_json_reports_build_dir_ambiguity_and_provenance() {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(["--project", temp.path().to_str().unwrap()])
@@ -266,6 +321,7 @@ fn doctor_text_reports_build_dir_ambiguity_with_vs_tag() {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(["--project", temp.path().to_str().unwrap()])
@@ -297,6 +353,7 @@ fn doctor_warns_when_profile_preset_is_not_in_presets_file() {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(["--project", temp.path().to_str().unwrap()])
@@ -345,6 +402,7 @@ ctest_args = ["--output-on-failure"]
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
         .args(["--project", temp.path().to_str().unwrap()])

@@ -8,7 +8,7 @@ use crate::cli::{
     InitArgs, InitLayoutArg, PlanCommand, TestArgs,
 };
 use crate::core::config::merge::{resolve, ConfigOverrides};
-use crate::core::config::model::{ConfigSource, Profile, ResolvedConfig};
+use crate::core::config::model::{BuildSystem, ConfigSource, Profile, ResolvedConfig};
 use crate::core::config::raw::RawConfig;
 use crate::core::detect::builddir::{
     classify, discover_build_dirs, AmbiguityWarning, DiscoverOptions, Provenance,
@@ -17,7 +17,7 @@ use crate::core::detect::msvc::{
     known_vsdevcmd_candidates, resolve_vsdevcmd, MsvcResolveInput, VsDevCmdResolution,
     VsDevCmdSource,
 };
-use crate::core::detect::{cmake, ctest, qt, Probe, SystemProbe};
+use crate::core::detect::{cmake, ctest, qmake, qt, Probe, SystemProbe};
 use crate::core::diagnostics::report::{self, DiagnosticReport};
 use crate::core::diagnostics::{
     exit_code_override, CommandKind, DiagnosticContext, Engine, Platform,
@@ -31,9 +31,12 @@ use crate::core::path::{path_to_slash, serialize_optional_path, serialize_path};
 use crate::core::plan::{CommandPlan, EnvironmentBootstrap};
 use crate::core::planners::{
     self, BuildPlanInputs, CheckPlanInputs, ConfigurePlanInputs, PlanContext, PlanMsvc,
-    PlanProfile, PlanTools, TestPlanInputs,
+    PlanProfile, PlanQmake, PlanTools, QmakeBuildConfig, TestPlanInputs,
 };
-use crate::core::project::{discover_root, ProjectContext};
+use crate::core::project::{
+    discover_root, discover_root_with_preference, locate_project_config, BuildSystemPreference,
+    ProjectContext, ProjectKind,
+};
 use crate::core::runner::shell::{render_command_display, run_vswhere};
 use crate::core::runner::{execute_plan, RunOptions};
 use crate::error::QtflowError;
@@ -452,11 +455,20 @@ fn build_command_plan(
     invocation: &PlanInvocation,
 ) -> Result<CommandPlan, QtflowError> {
     let plan_ctx = build_plan_context(ctx, invocation);
-    match &plan_ctx.command {
-        planners::PlanCommand::Configure(_) => planners::configure::plan(&plan_ctx),
-        planners::PlanCommand::Build(_) => planners::build::plan(&plan_ctx),
-        planners::PlanCommand::Test(_) => planners::test::plan(&plan_ctx),
-        planners::PlanCommand::Check(_) => planners::check::plan(&plan_ctx),
+    match ctx.project.kind {
+        ProjectKind::Cmake => match &plan_ctx.command {
+            planners::PlanCommand::Configure(_) => planners::configure::plan(&plan_ctx),
+            planners::PlanCommand::Build(_) => planners::build::plan(&plan_ctx),
+            planners::PlanCommand::Test(_) => planners::test::plan(&plan_ctx),
+            planners::PlanCommand::Check(_) => planners::check::plan(&plan_ctx),
+        },
+        ProjectKind::Qmake => match &plan_ctx.command {
+            planners::PlanCommand::Configure(_) => planners::qmake_configure::plan(&plan_ctx),
+            planners::PlanCommand::Build(_) => planners::qmake_build::plan(&plan_ctx),
+            planners::PlanCommand::Test(_) | planners::PlanCommand::Check(_) => {
+                Err(qmake_test_check_error())
+            }
+        },
     }
 }
 
@@ -475,6 +487,17 @@ fn build_plan_context(ctx: &AppContext, invocation: &PlanInvocation) -> PlanCont
             cmake: ctx.config.tools.cmake.clone(),
             ctest: ctx.config.tools.ctest.clone(),
         },
+        qmake: PlanQmake {
+            qmake: qmake_program_for_plan(ctx),
+            spec: qmake_spec_for_plan(ctx),
+            make: qmake_make_for_plan(ctx),
+            pro_file: qmake_pro_file_for_plan(ctx),
+            config: qmake_config_for_profile(
+                &ctx.config.active_profile,
+                active_profile.config_name.as_deref(),
+            ),
+            config_args: ctx.config.qmake.config_args.clone(),
+        },
         msvc: PlanMsvc {
             is_windows: cfg!(windows),
             enabled: ctx.config.msvc.enabled,
@@ -485,6 +508,56 @@ fn build_plan_context(ctx: &AppContext, invocation: &PlanInvocation) -> PlanCont
         },
         command: invocation
             .plan_command_with_profile_config_name(active_profile.config_name.as_deref()),
+    }
+}
+
+fn qmake_test_check_error() -> QtflowError {
+    QtflowError::ConfigOrArg(
+        "qmake test/check not yet supported (coming in next phase)".to_string(),
+    )
+}
+
+fn qmake_program_for_plan(ctx: &AppContext) -> String {
+    let input = qmake::QmakeResolveInput::real(ctx.config.qmake.qmake.clone(), ctx.env.clone());
+    qmake::resolve_qmake(&input)
+        .path
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .or_else(|| ctx.env.get("QTFLOW_QMAKE").cloned())
+        .or_else(|| ctx.config.qmake.qmake.clone())
+        .unwrap_or_else(|| "qmake".to_string())
+}
+
+fn qmake_spec_for_plan(ctx: &AppContext) -> String {
+    ctx.config
+        .qmake
+        .spec
+        .clone()
+        .unwrap_or_else(|| qmake::default_spec(cfg!(windows), ctx.config.msvc.enabled).to_string())
+}
+
+fn qmake_make_for_plan(ctx: &AppContext) -> String {
+    let spec = qmake_spec_for_plan(ctx);
+    let input =
+        qmake::MakeToolResolveInput::real(ctx.config.qmake.make.clone(), spec, cfg!(windows));
+    qmake::resolve_make_tool(&input).tool
+}
+
+fn qmake_pro_file_for_plan(ctx: &AppContext) -> PathBuf {
+    ctx.config
+        .qmake
+        .pro_file
+        .clone()
+        .unwrap_or_else(|| ctx.project.project_file.clone())
+}
+
+fn qmake_config_for_profile(profile: &str, profile_config_name: Option<&str>) -> QmakeBuildConfig {
+    // qmake only needs debug/release here. A profile config_name of Debug/Release acts as
+    // a simple override; otherwise the profile name is used.
+    let value = profile_config_name.unwrap_or(profile).to_lowercase();
+    if value.contains("release") {
+        QmakeBuildConfig::Release
+    } else {
+        QmakeBuildConfig::Debug
     }
 }
 
@@ -898,16 +971,13 @@ fn resolve_context(
     let start = global.project.clone().unwrap_or(
         std::env::current_dir().map_err(|err| QtflowError::ConfigOrArg(err.to_string()))?,
     );
-    let project = discover_root(&start)?;
-    let config_path = resolve_config_path(global, &env, &project)?;
-    let raw = match &config_path {
-        Some(path) => Some(load_raw_config(path)?),
-        None => None,
-    };
+    let initial_project = discover_root(&start)?;
+    let (project, config_path, raw) =
+        resolve_project_and_config(global, &env, &start, initial_project)?;
 
     let mut overrides = command_overrides;
     overrides.profile = global.profile.clone();
-    overrides.config_path = config_path;
+    overrides.config_path = config_path.clone();
 
     let config = resolve(raw, &env, &overrides, &project.root);
 
@@ -916,6 +986,80 @@ fn resolve_context(
         config,
         env,
     })
+}
+
+fn resolve_project_and_config(
+    global: &GlobalInvocation,
+    env: &BTreeMap<String, String>,
+    start: &Path,
+    initial_project: ProjectContext,
+) -> Result<(ProjectContext, Option<PathBuf>, Option<RawConfig>), QtflowError> {
+    let initial_config_path = resolve_config_path(global, env, &initial_project)?
+        .or_else(|| fallback_ancestor_config_path(global, env, &initial_project));
+    let initial_raw = match &initial_config_path {
+        Some(path) => Some(load_raw_config(path)?),
+        None => None,
+    };
+    let provisional = resolve(
+        initial_raw.clone(),
+        env,
+        &ConfigOverrides {
+            config_path: initial_config_path.clone(),
+            profile: global.profile.clone(),
+            ..ConfigOverrides::default()
+        },
+        &initial_project.root,
+    );
+    let preference = discovery_preference(provisional.build_system);
+
+    if preference == BuildSystemPreference::Auto {
+        return Ok((initial_project, initial_config_path, initial_raw));
+    }
+
+    let project = discover_root_with_preference(start, preference)?;
+    if !has_explicit_config(global, env) && initial_config_path.is_some() {
+        return Ok((project, initial_config_path, initial_raw));
+    }
+
+    let config_path = resolve_config_path(global, env, &project)?;
+    let raw = match &config_path {
+        Some(path) => Some(load_raw_config(path)?),
+        None => None,
+    };
+
+    Ok((project, config_path, raw))
+}
+
+fn has_explicit_config(global: &GlobalInvocation, env: &BTreeMap<String, String>) -> bool {
+    global.config.is_some() || env.contains_key("QTFLOW_CONFIG")
+}
+
+fn fallback_ancestor_config_path(
+    global: &GlobalInvocation,
+    env: &BTreeMap<String, String>,
+    initial_project: &ProjectContext,
+) -> Option<PathBuf> {
+    if has_explicit_config(global, env) {
+        return None;
+    }
+
+    let mut current = initial_project.root.clone();
+    loop {
+        if !current.pop() {
+            return None;
+        }
+        if let Some(config_path) = locate_project_config(&current) {
+            return Some(config_path);
+        }
+    }
+}
+
+fn discovery_preference(build_system: BuildSystem) -> BuildSystemPreference {
+    match build_system {
+        BuildSystem::Auto => BuildSystemPreference::Auto,
+        BuildSystem::Cmake => BuildSystemPreference::Cmake,
+        BuildSystem::Qmake => BuildSystemPreference::Qmake,
+    }
 }
 
 fn resolve_config_path(
@@ -1016,6 +1160,9 @@ struct DoctorReport {
     profiles: Vec<String>,
     profile: String,
     selected_profile: DoctorProfile,
+    build_system: String,
+    #[serde(serialize_with = "serialize_path")]
+    project_file: PathBuf,
     #[serde(
         skip_serializing_if = "Option::is_none",
         serialize_with = "serialize_optional_path"
@@ -1023,6 +1170,7 @@ struct DoctorReport {
     cmake_presets_file: Option<PathBuf>,
     cmake: DoctorTool,
     ctest: DoctorTool,
+    qmake: DoctorQmake,
     cmake_presets: Vec<String>,
     discovered_build_dirs: Vec<DoctorDiscoveredBuildDir>,
     build_dir_warnings: Vec<DoctorBuildDirWarning>,
@@ -1060,6 +1208,28 @@ struct DoctorTool {
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DoctorQmake {
+    path: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    spec: String,
+    make: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    rejected_candidates: Vec<DoctorQmakeRejectedCandidate>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DoctorQmakeRejectedCandidate {
+    path: String,
+    reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1119,13 +1289,16 @@ impl DoctorReport {
         let ctest = DoctorTool::from_probe(&ctx.config.tools.ctest, args.no_probe, || {
             ctest::version(probe, &ctx.config.tools.ctest)
         });
+        let qmake = DoctorQmake::from_context(ctx, args.no_probe, probe);
         let (cmake_presets, mut warnings) = list_presets_for_doctor(ctx);
-        if let Some(preset) = &selected.preset {
-            if !cmake_presets.iter().any(|name| name == preset) {
-                warnings.push(format!(
+        if ctx.project.kind == ProjectKind::Cmake {
+            if let Some(preset) = &selected.preset {
+                if !cmake_presets.iter().any(|name| name == preset) {
+                    warnings.push(format!(
                     "configured preset '{preset}' for profile '{}' was not found in CMakePresets.json",
                     ctx.config.active_profile
                 ));
+                }
             }
         }
         let (discovered_build_dirs, build_dir_warnings) = discovered_build_dirs_for_doctor(ctx);
@@ -1145,9 +1318,12 @@ impl DoctorReport {
             profiles,
             profile: ctx.config.active_profile.clone(),
             selected_profile: DoctorProfile::from_profile(&ctx.config.active_profile, selected),
+            build_system: project_kind_display(ctx.project.kind).to_string(),
+            project_file: ctx.project.project_file.clone(),
             cmake_presets_file: ctx.project.presets_file.clone(),
             cmake,
             ctest,
+            qmake,
             cmake_presets,
             discovered_build_dirs,
             build_dir_warnings,
@@ -1182,6 +1358,68 @@ impl DoctorTool {
                 status: "notFound".to_string(),
                 version: None,
             },
+        }
+    }
+}
+
+impl DoctorQmake {
+    fn from_context(ctx: &AppContext, no_probe: bool, probe: &impl Probe) -> Self {
+        let spec = qmake_spec_for_plan(ctx);
+        let make = qmake_make_for_plan(ctx);
+        let input = qmake::QmakeResolveInput::real(ctx.config.qmake.qmake.clone(), ctx.env.clone());
+        let resolution = qmake::resolve_qmake(&input);
+        let rejected_candidates = resolution
+            .rejected
+            .into_iter()
+            .map(DoctorQmakeRejectedCandidate::from_rejected)
+            .collect::<Vec<_>>();
+
+        match resolution.path {
+            Some(path) => {
+                let display_path = path.to_string_lossy().replace('\\', "/");
+                let version = if no_probe {
+                    None
+                } else {
+                    qmake::version(probe, &display_path)
+                };
+                Self {
+                    path: display_path,
+                    status: if no_probe {
+                        "notProbed".to_string()
+                    } else if version.is_some() {
+                        "found".to_string()
+                    } else {
+                        "notFound".to_string()
+                    },
+                    source: resolution.source.map(qmake_source_display),
+                    version,
+                    spec,
+                    make,
+                    rejected_candidates,
+                }
+            }
+            None => Self {
+                path: "qmake".to_string(),
+                status: if no_probe {
+                    "notProbed".to_string()
+                } else {
+                    "notFound".to_string()
+                },
+                source: None,
+                version: None,
+                spec,
+                make,
+                rejected_candidates,
+            },
+        }
+    }
+}
+
+impl DoctorQmakeRejectedCandidate {
+    fn from_rejected(candidate: qmake::QmakeRejectedCandidate) -> Self {
+        Self {
+            path: path_to_slash(&candidate.path),
+            reason: qmake_rejection_reason_display(candidate.reason).to_string(),
         }
     }
 }
@@ -1242,6 +1480,8 @@ impl DoctorProfile {
 
 fn print_doctor_text(report: &DoctorReport) {
     println!("Project root: {}", path_to_slash(&report.project_root));
+    println!("Build system: {}", report.build_system);
+    println!("Project file: {}", path_to_slash(&report.project_file));
     println!("Config file: {}", report.config_source);
     println!("Profiles: {}", report.profiles.join(", "));
     println!("Selected profile: {}", report.profile);
@@ -1275,6 +1515,20 @@ fn print_doctor_text(report: &DoctorReport) {
             .as_deref()
             .unwrap_or(report.ctest.status.as_str())
     );
+    println!(
+        "qmake: {} ({}) spec={} make={}",
+        report.qmake.path,
+        report
+            .qmake
+            .version
+            .as_deref()
+            .unwrap_or(report.qmake.status.as_str()),
+        report.qmake.spec,
+        report.qmake.make
+    );
+    for candidate in &report.qmake.rejected_candidates {
+        println!("qmake rejected: {} ({})", candidate.path, candidate.reason);
+    }
     println!(
         "CMake presets: {}",
         if report.cmake_presets.is_empty() {
@@ -1441,8 +1695,30 @@ fn provenance_json_name(provenance: Provenance) -> &'static str {
     }
 }
 
+fn project_kind_display(kind: ProjectKind) -> &'static str {
+    match kind {
+        ProjectKind::Cmake => "cmake",
+        ProjectKind::Qmake => "qmake",
+    }
+}
+
 fn tool_path_display(program: &str) -> String {
     program.replace('\\', "/")
+}
+
+fn qmake_source_display(source: qmake::QmakeSource) -> String {
+    match source {
+        qmake::QmakeSource::Config => "config",
+        qmake::QmakeSource::EnvQtflow => "env:QTFLOW_QMAKE",
+        qmake::QmakeSource::Path => "path",
+    }
+    .to_string()
+}
+
+fn qmake_rejection_reason_display(reason: qmake::QmakeRejectionReason) -> &'static str {
+    match reason {
+        qmake::QmakeRejectionReason::Conda => "conda",
+    }
 }
 
 fn vsdevcmd_source_display(source: VsDevCmdSource) -> String {
@@ -1521,7 +1797,9 @@ mod tests {
         .expect("presets");
         let project = ProjectContext {
             root: temp.path().to_path_buf(),
-            cmake_lists: temp.path().join("CMakeLists.txt"),
+            kind: ProjectKind::Cmake,
+            project_file: temp.path().join("CMakeLists.txt"),
+            cmake_lists: Some(temp.path().join("CMakeLists.txt")),
             presets_file: Some(temp.path().join("CMakePresets.json")),
             config_file: None,
         };
@@ -1566,7 +1844,9 @@ mod tests {
         .expect("presets");
         let project = ProjectContext {
             root: temp.path().to_path_buf(),
-            cmake_lists: temp.path().join("CMakeLists.txt"),
+            kind: ProjectKind::Cmake,
+            project_file: temp.path().join("CMakeLists.txt"),
+            cmake_lists: Some(temp.path().join("CMakeLists.txt")),
             presets_file: Some(temp.path().join("CMakePresets.json")),
             config_file: None,
         };
@@ -1599,7 +1879,9 @@ mod tests {
         std::fs::write(temp.path().join("CMakeLists.txt"), "").expect("CMakeLists");
         let project = ProjectContext {
             root: temp.path().to_path_buf(),
-            cmake_lists: temp.path().join("CMakeLists.txt"),
+            kind: ProjectKind::Cmake,
+            project_file: temp.path().join("CMakeLists.txt"),
+            cmake_lists: Some(temp.path().join("CMakeLists.txt")),
             presets_file: None,
             config_file: None,
         };

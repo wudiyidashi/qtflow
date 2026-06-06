@@ -36,6 +36,7 @@ build_dir = "out/build/release"
 
 ```toml
 default_profile = "debug"
+build_system = "auto"
 
 [tools]
 cmake = "cmake"
@@ -51,6 +52,13 @@ vsdevcmd = ""
 [qt]
 root = ""
 bin_dir = ""
+
+[qmake]
+qmake = ""
+spec = ""
+make = ""
+pro_file = ""
+config_args = []
 
 [profiles.debug]
 preset = "Qt-Debug"
@@ -87,11 +95,13 @@ max_log_bytes = 200000
 
 ```toml
 default_profile = "debug"
+build_system = "auto"
 ```
 
 Fields:
 
 - `default_profile`: profile used when CLI omits `--profile`.
+- `build_system`: `auto`, `cmake`, or `qmake`. `auto` discovers the first ancestor with `CMakeLists.txt` or `*.pro`; CMake wins when both exist in the same directory.
 
 ### tools
 
@@ -139,6 +149,25 @@ Fields:
 - `bin_dir`: optional Qt bin directory to append/prepend to PATH.
 
 MVP should only report these in `doctor` and optionally add `bin_dir` to command env when configured.
+
+### qmake
+
+```toml
+[qmake]
+qmake = ""
+spec = ""
+make = ""
+pro_file = ""
+config_args = []
+```
+
+Fields:
+
+- `qmake`: executable name or path. Empty means auto-detect; `QTFLOW_QMAKE` is also honored at command planning/detection time.
+- `spec`: qmake mkspec. Empty means `win32-msvc` on Windows/MSVC, otherwise a platform default such as `linux-g++`.
+- `make`: make tool. Empty means auto-detect from spec/platform, preferring `nmake`/`jom` for MSVC and `mingw32-make`/`make` otherwise.
+- `pro_file`: explicit `.pro` path. Empty means the discovered primary `.pro` file.
+- `config_args`: extra arguments appended to the qmake configure command.
 
 ### profiles
 
@@ -222,6 +251,7 @@ QTFLOW_CONFIG          Explicit config path.
 QTFLOW_PROFILE         Default profile override.
 QTFLOW_CMAKE          CMake executable override.
 QTFLOW_CTEST          CTest executable override.
+QTFLOW_QMAKE          qmake executable override.
 QTFLOW_VSDEVCMD_BAT   VsDevCmd path override.
 VSDEVCMD_BAT          Compatibility path override.
 ```

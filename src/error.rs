@@ -10,7 +10,7 @@ pub enum QtflowError {
     #[error("required tool not found: {0}")]
     ToolNotFound(String),
 
-    #[error("project root not found from {start}: no ancestor contains CMakeLists.txt")]
+    #[error("project root not found from {start}: no ancestor contains CMakeLists.txt or *.pro")]
     ProjectRootNotFound { start: PathBuf },
 
     #[error("config file not found: {0}")]

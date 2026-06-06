@@ -95,6 +95,7 @@ fn clean_qtflow() -> Command {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT");
     command
