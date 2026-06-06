@@ -37,6 +37,7 @@ pub fn resolve(
     let had_raw = raw.is_some();
 
     if let Some(raw) = raw {
+        cfg.warnings.extend(raw.unknown_key_warnings());
         apply_file(&mut cfg, raw, project_root);
     }
 
@@ -70,8 +71,10 @@ pub fn resolve(
                 generator: None,
                 config_name: None,
                 configure_args: Vec::new(),
+                cache_variables: BTreeMap::new(),
                 build_args: Vec::new(),
                 ctest_args: vec![DEFAULT_CTEST_ARG.to_string()],
+                path_prepend: Vec::new(),
                 env: BTreeMap::new(),
             },
         );
@@ -90,8 +93,10 @@ fn inferred_defaults(project_root: &Path) -> ResolvedConfig {
             generator: None,
             config_name: None,
             configure_args: Vec::new(),
+            cache_variables: BTreeMap::new(),
             build_args: Vec::new(),
             ctest_args: vec![DEFAULT_CTEST_ARG.to_string()],
+            path_prepend: Vec::new(),
             env: BTreeMap::new(),
         },
     );
@@ -103,8 +108,10 @@ fn inferred_defaults(project_root: &Path) -> ResolvedConfig {
             generator: None,
             config_name: None,
             configure_args: Vec::new(),
+            cache_variables: BTreeMap::new(),
             build_args: Vec::new(),
             ctest_args: vec![DEFAULT_CTEST_ARG.to_string()],
+            path_prepend: Vec::new(),
             env: BTreeMap::new(),
         },
     );
@@ -142,6 +149,7 @@ fn inferred_defaults(project_root: &Path) -> ResolvedConfig {
             max_log_bytes: 200_000,
         },
         source: ConfigSource::Inferred,
+        warnings: Vec::new(),
     }
 }
 
@@ -279,8 +287,10 @@ fn default_profile(project_root: &Path, name: &str) -> Profile {
         generator: None,
         config_name: None,
         configure_args: Vec::new(),
+        cache_variables: BTreeMap::new(),
         build_args: Vec::new(),
         ctest_args: vec![DEFAULT_CTEST_ARG.to_string()],
+        path_prepend: Vec::new(),
         env: BTreeMap::new(),
     }
 }
@@ -301,11 +311,20 @@ fn merge_profile(mut profile: Profile, raw: RawProfile, project_root: &Path) -> 
     if let Some(configure_args) = raw.configure_args {
         profile.configure_args = configure_args;
     }
+    if let Some(cache_variables) = raw.cache_variables {
+        profile.cache_variables = cache_variables;
+    }
     if let Some(build_args) = raw.build_args {
         profile.build_args = build_args;
     }
     if let Some(ctest_args) = raw.ctest_args {
         profile.ctest_args = ctest_args;
+    }
+    if let Some(path_prepend) = raw.path_prepend {
+        profile.path_prepend = path_prepend
+            .into_iter()
+            .map(|path| absolutize(project_root, path))
+            .collect();
     }
     profile.env.extend(raw.env);
     profile
@@ -355,6 +374,7 @@ mod tests {
         assert_eq!(cfg.qmake.spec, None);
         assert_eq!(cfg.qmake.make, None);
         assert!(cfg.qmake.config_args.is_empty());
+        assert!(cfg.warnings.is_empty());
         assert_eq!(cfg.msvc.arch, "x64");
         assert_eq!(
             cfg.profiles["debug"].build_dir,
@@ -399,6 +419,71 @@ mod tests {
     }
 
     #[test]
+    fn file_defined_profile_loads_cache_variables_and_path_prepend() {
+        let root = PathBuf::from("/repo");
+        let raw = RawConfig {
+            profiles: BTreeMap::from([(
+                "debug".to_string(),
+                RawProfile {
+                    cache_variables: Some(BTreeMap::from([(
+                        "CMAKE_PREFIX_PATH".to_string(),
+                        "C:/Qt".to_string(),
+                    )])),
+                    path_prepend: Some(vec![
+                        PathBuf::from("tools/bin"),
+                        PathBuf::from("/opt/qt/bin"),
+                    ]),
+                    ..RawProfile::default()
+                },
+            )]),
+            ..RawConfig::default()
+        };
+
+        let cfg = resolve(
+            Some(raw),
+            &BTreeMap::new(),
+            &ConfigOverrides::default(),
+            &root,
+        );
+
+        assert_eq!(
+            cfg.profiles["debug"].cache_variables,
+            BTreeMap::from([("CMAKE_PREFIX_PATH".to_string(), "C:/Qt".to_string())])
+        );
+        assert_eq!(
+            cfg.profiles["debug"].path_prepend,
+            vec![
+                PathBuf::from("/repo/tools/bin"),
+                PathBuf::from("/opt/qt/bin")
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_key_warnings_flow_to_resolved_config() {
+        let root = PathBuf::from("/repo");
+        let raw: RawConfig = toml::from_str(
+            r#"
+[profiles.debug]
+cmake_args = ["-DOPT=ON"]
+"#,
+        )
+        .expect("parse");
+
+        let cfg = resolve(
+            Some(raw),
+            &BTreeMap::new(),
+            &ConfigOverrides::default(),
+            &root,
+        );
+
+        assert_eq!(
+            cfg.warnings,
+            vec!["unknown key 'cmake_args' in [profiles.debug] (ignored)".to_string()]
+        );
+    }
+
+    #[test]
     fn file_defined_profile_with_preset_uses_file_value() {
         let root = PathBuf::from("/repo");
         let raw = RawConfig {
@@ -433,6 +518,7 @@ mod tests {
                 make: Some("nmake".to_string()),
                 pro_file: Some(PathBuf::from("app/app.pro")),
                 config_args: Some(vec!["-recursive".to_string()]),
+                ..super::super::raw::RawQmake::default()
             }),
             ..RawConfig::default()
         };
@@ -505,6 +591,7 @@ mod tests {
                 cmake: Some("file-cmake".to_string()),
                 ctest: Some("file-ctest".to_string()),
                 ninja: None,
+                ..RawTools::default()
             }),
             msvc: Some(RawMsvc {
                 vsdevcmd: Some(PathBuf::from("file-vsdevcmd.bat")),
@@ -555,6 +642,7 @@ mod tests {
                 cmake: Some("file-cmake".to_string()),
                 ctest: Some("file-ctest".to_string()),
                 ninja: None,
+                ..RawTools::default()
             }),
             ..RawConfig::default()
         };

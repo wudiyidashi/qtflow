@@ -269,6 +269,8 @@ preset = "Qt-Debug"
 build_dir = "out/build/debug"
 generator = "Ninja"
 configure_args = []
+cache_variables = { CMAKE_TOOLCHAIN_FILE = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake", CMAKE_PREFIX_PATH = "C:/Qt/6.8.0/msvc2022_64" }
+path_prepend = ["C:/tools/bin"]
 build_args = []
 ctest_args = ["--output-on-failure"]
 
@@ -280,6 +282,8 @@ preset = "Qt-Release"
 build_dir = "out/build/release"
 generator = "Ninja"
 configure_args = []
+cache_variables = {}
+path_prepend = []
 build_args = []
 ctest_args = ["--output-on-failure"]
 
@@ -296,16 +300,30 @@ max_log_bytes = 200000
 Configuration fields:
 
 - `default_profile`: profile used when `--profile` is omitted.
-- `[tools].cmake`, `[tools].ctest`, `[tools].ninja`: executable names or absolute paths.
+- `[tools].cmake`, `[tools].ctest`, `[tools].ninja`: executable names or absolute paths. Ninja resolution uses `[tools].ninja`, then `QTFLOW_NINJA`, then `PATH`.
 - `[msvc].enabled`, `arch`, `host_arch`, `vsdevcmd`: Windows MSVC bootstrap settings.
-- `[qt].root`, `[qt].bin_dir`: Qt hints reported by `doctor`.
+- `[qt].root`: Qt install hint reported by `doctor`.
+- `[qt].bin_dir`: Qt bin directory prepended to `PATH` for every planned command, useful for Qt runtime DLLs during tests.
 - `[profiles.<name>].preset`: CMake preset name.
 - `[profiles.<name>].build_dir`: build directory, relative to project root unless absolute.
 - `[profiles.<name>].generator`: generator for explicit `cmake -S/-B/-G` configure when no preset is used.
 - `[profiles.<name>].config_name`: optional build/test configuration for multi-config generators. CLI `--config-name` overrides the profile value.
-- `[profiles.<name>].configure_args`, `build_args`, `ctest_args`: extra arguments appended to generated commands.
+- `[profiles.<name>].cache_variables`: CMake cache variables rendered as sorted `-DKEY=VALUE` configure args before `configure_args`.
+- `[profiles.<name>].configure_args`, `build_args`, `ctest_args`: extra arguments appended to generated commands. `configure_args` is appended after `cache_variables`, so it can override them.
+- `[profiles.<name>].path_prepend`: extra directories prepended to `PATH` for command steps, after `[qt].bin_dir`; relative paths are resolved from the project root.
 - `[profiles.<name>.env]`: environment variables added to command steps.
 - `[diagnostics]`: enable/disable diagnostics and bound captured log size.
+
+Unknown config keys are ignored for forward compatibility, but qtflow prints a warning to stderr unless `--quiet` is set.
+
+To inject a vcpkg toolchain and Qt prefix without a preset:
+
+```toml
+[profiles.debug]
+build_dir = "build"
+generator = "Ninja"
+cache_variables = { CMAKE_TOOLCHAIN_FILE = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake", CMAKE_PREFIX_PATH = "C:/Qt/6.8.0/msvc2022_64" }
+```
 
 Environment variables:
 
@@ -314,6 +332,7 @@ QTFLOW_CONFIG          Explicit config path.
 QTFLOW_PROFILE         Default profile override.
 QTFLOW_CMAKE           CMake executable override.
 QTFLOW_CTEST           CTest executable override.
+QTFLOW_NINJA           Ninja executable override.
 QTFLOW_VSDEVCMD_BAT    VsDevCmd.bat path override.
 VSDEVCMD_BAT           Compatibility VsDevCmd.bat path override.
 ```

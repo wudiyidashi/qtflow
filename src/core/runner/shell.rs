@@ -102,12 +102,46 @@ fn msvc_inner_command(
         .map(String::as_str)
         .collect::<Vec<_>>();
     let command_parts = command_parts(step);
+    let path_prepend = msvc_path_prepend_command(&step.path_prepend);
 
-    format!(
-        "{} && {}",
-        quote_for_cmd(&bootstrap_refs),
-        quote_for_cmd(&command_parts)
-    )
+    match path_prepend {
+        Some(path_prepend) => format!(
+            "{} && {} && {}",
+            quote_for_cmd(&bootstrap_refs),
+            path_prepend,
+            quote_for_cmd(&command_parts)
+        ),
+        None => format!(
+            "{} && {}",
+            quote_for_cmd(&bootstrap_refs),
+            quote_for_cmd(&command_parts)
+        ),
+    }
+}
+
+fn msvc_path_prepend_command(path_prepend: &[String]) -> Option<String> {
+    let joined = path_prepend
+        .iter()
+        .filter(|entry| !entry.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(";");
+    (!joined.is_empty()).then(|| format!("set \"PATH={};%PATH%\"", escape_set_value(&joined)))
+}
+
+fn escape_set_value(value: &str) -> String {
+    let mut escaped = String::new();
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\"\""),
+            '&' | '|' | '<' | '>' | '^' => {
+                escaped.push('^');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn command_parts(step: &CommandStep) -> Vec<&str> {
@@ -166,6 +200,7 @@ mod tests {
                 "foo".to_string(),
             ],
             env: BTreeMap::new(),
+            path_prepend: Vec::new(),
             bootstrap,
         }
     }
@@ -220,6 +255,7 @@ mod tests {
             program: "C:/Program Files/tool.exe".to_string(),
             args: vec!["left&&right".to_string(), "".to_string()],
             env: BTreeMap::new(),
+            path_prepend: Vec::new(),
             bootstrap: None,
         };
 
@@ -240,6 +276,21 @@ mod tests {
         assert_eq!(
             display,
             "cmd.exe /d /s /c \"call \"C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/Tools/VsDevCmd.bat\" -arch=x64 -host_arch=x64 && cmake --build C:/repo/out/build/debug --target foo\""
+        );
+    }
+
+    #[test]
+    fn render_command_display_for_bootstrap_includes_path_prepend_inside_cmd_session() {
+        let mut step = step(Some(EnvironmentBootstrap::Msvc {
+            vsdevcmd: PathBuf::from("C:/VS/Common7/Tools/VsDevCmd.bat"),
+            arch: "x64".to_string(),
+            host_arch: None,
+        }));
+        step.path_prepend = vec!["C:/Qt/bin".to_string(), "C:/tools/bin".to_string()];
+
+        assert_eq!(
+            render_command_display(&step),
+            "cmd.exe /d /s /c \"call C:/VS/Common7/Tools/VsDevCmd.bat -arch=x64 && set \"PATH=C:/Qt/bin;C:/tools/bin;%PATH%\" && cmake --build C:/repo/out/build/debug --target foo\""
         );
     }
 

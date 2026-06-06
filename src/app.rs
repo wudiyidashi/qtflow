@@ -17,7 +17,7 @@ use crate::core::detect::msvc::{
     known_vsdevcmd_candidates, resolve_vsdevcmd, MsvcResolveInput, VsDevCmdResolution,
     VsDevCmdSource,
 };
-use crate::core::detect::{cmake, ctest, qmake, qt, Probe, SystemProbe};
+use crate::core::detect::{cmake, ctest, ninja, qmake, qt, Probe, SystemProbe};
 use crate::core::diagnostics::report::{self, DiagnosticReport};
 use crate::core::diagnostics::{
     exit_code_override, CommandKind, DiagnosticContext, Engine, Platform,
@@ -478,14 +478,17 @@ fn build_plan_context(ctx: &AppContext, invocation: &PlanInvocation) -> PlanCont
         .profiles
         .get(&ctx.config.active_profile)
         .expect("active profile is inserted during resolution");
+    let mut plan_profile = PlanProfile::from(active_profile);
+    plan_profile.path_prepend = command_path_prepend(ctx, active_profile);
 
     PlanContext {
         project_root: ctx.project.root.clone(),
         profile: ctx.config.active_profile.clone(),
-        active_profile: PlanProfile::from(active_profile),
+        active_profile: plan_profile,
         tools: PlanTools {
             cmake: ctx.config.tools.cmake.clone(),
             ctest: ctx.config.tools.ctest.clone(),
+            ninja: resolved_ninja_for_plan(ctx),
         },
         qmake: PlanQmake {
             qmake: qmake_program_for_plan(ctx),
@@ -515,6 +518,30 @@ fn qmake_test_check_error() -> QtflowError {
     QtflowError::ConfigOrArg(
         "qmake test/check not yet supported (coming in next phase)".to_string(),
     )
+}
+
+fn resolved_ninja_for_plan(ctx: &AppContext) -> Option<PathBuf> {
+    let input = ninja::NinjaResolveInput::real(ctx.config.tools.ninja.clone(), ctx.env.clone());
+    ninja::resolve_ninja(&input).path
+}
+
+fn command_path_prepend(ctx: &AppContext, profile: &Profile) -> Vec<String> {
+    ctx.config
+        .qt
+        .bin_dir
+        .iter()
+        .chain(profile.path_prepend.iter())
+        .map(|path| absolutize_for_command(&ctx.project.root, path))
+        .map(|path| path_to_slash(&path))
+        .collect()
+}
+
+fn absolutize_for_command(project_root: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        project_root.join(path)
+    }
 }
 
 fn qmake_program_for_plan(ctx: &AppContext) -> String {
@@ -638,8 +665,14 @@ impl From<&Profile> for PlanProfile {
             generator: profile.generator.clone(),
             config_name: profile.config_name.clone(),
             configure_args: profile.configure_args.clone(),
+            cache_variables: profile.cache_variables.clone(),
             build_args: profile.build_args.clone(),
             ctest_args: profile.ctest_args.clone(),
+            path_prepend: profile
+                .path_prepend
+                .iter()
+                .map(|path| path_to_slash(path))
+                .collect(),
             env: profile.env.clone(),
         }
     }
@@ -758,6 +791,9 @@ fn print_plan_text(plan: &CommandPlan) {
                 );
             }
             None => println!("{}: {}", step.label, command),
+        }
+        if !step.path_prepend.is_empty() {
+            println!("  path-prepend: {}", step.path_prepend.join(", "));
         }
     }
 }
@@ -980,12 +1016,22 @@ fn resolve_context(
     overrides.config_path = config_path.clone();
 
     let config = resolve(raw, &env, &overrides, &project.root);
+    print_config_warnings(&config.warnings, global);
 
     Ok(AppContext {
         project,
         config,
         env,
     })
+}
+
+fn print_config_warnings(warnings: &[String], global: &GlobalInvocation) {
+    if global.quiet {
+        return;
+    }
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
 }
 
 fn resolve_project_and_config(
@@ -1170,6 +1216,7 @@ struct DoctorReport {
     cmake_presets_file: Option<PathBuf>,
     cmake: DoctorTool,
     ctest: DoctorTool,
+    ninja: DoctorNinja,
     qmake: DoctorQmake,
     cmake_presets: Vec<String>,
     discovered_build_dirs: Vec<DoctorDiscoveredBuildDir>,
@@ -1208,6 +1255,15 @@ struct DoctorTool {
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DoctorNinja {
+    path: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1289,6 +1345,7 @@ impl DoctorReport {
         let ctest = DoctorTool::from_probe(&ctx.config.tools.ctest, args.no_probe, || {
             ctest::version(probe, &ctx.config.tools.ctest)
         });
+        let ninja = DoctorNinja::from_context(ctx);
         let qmake = DoctorQmake::from_context(ctx, args.no_probe, probe);
         let (cmake_presets, mut warnings) = list_presets_for_doctor(ctx);
         if ctx.project.kind == ProjectKind::Cmake {
@@ -1323,6 +1380,7 @@ impl DoctorReport {
             cmake_presets_file: ctx.project.presets_file.clone(),
             cmake,
             ctest,
+            ninja,
             qmake,
             cmake_presets,
             discovered_build_dirs,
@@ -1333,6 +1391,25 @@ impl DoctorReport {
             no_probe: args.no_probe,
             show_known_msvc: args.show_known_msvc,
             known_msvc_candidates,
+        }
+    }
+}
+
+impl DoctorNinja {
+    fn from_context(ctx: &AppContext) -> Self {
+        let input = ninja::NinjaResolveInput::real(ctx.config.tools.ninja.clone(), ctx.env.clone());
+        let resolution = ninja::resolve_ninja(&input);
+        match resolution.path {
+            Some(path) => Self {
+                path: path_to_slash(&path),
+                status: "found".to_string(),
+                source: resolution.source.map(ninja_source_display),
+            },
+            None => Self {
+                path: "ninja".to_string(),
+                status: "notFound".to_string(),
+                source: None,
+            },
         }
     }
 }
@@ -1514,6 +1591,15 @@ fn print_doctor_text(report: &DoctorReport) {
             .version
             .as_deref()
             .unwrap_or(report.ctest.status.as_str())
+    );
+    println!(
+        "Ninja: {} ({})",
+        report.ninja.path,
+        report
+            .ninja
+            .source
+            .as_deref()
+            .unwrap_or(report.ninja.status.as_str())
     );
     println!(
         "qmake: {} ({}) spec={} make={}",
@@ -1715,6 +1801,15 @@ fn qmake_source_display(source: qmake::QmakeSource) -> String {
     .to_string()
 }
 
+fn ninja_source_display(source: ninja::NinjaSource) -> String {
+    match source {
+        ninja::NinjaSource::Config => "config",
+        ninja::NinjaSource::EnvQtflow => "env:QTFLOW_NINJA",
+        ninja::NinjaSource::Path => "path",
+    }
+    .to_string()
+}
+
 fn qmake_rejection_reason_display(reason: qmake::QmakeRejectionReason) -> &'static str {
     match reason {
         qmake::QmakeRejectionReason::Conda => "conda",
@@ -1751,6 +1846,7 @@ mod tests {
                     program: "cmake".to_string(),
                     args: vec!["--build".to_string(), "/repo/build".to_string()],
                     env: BTreeMap::new(),
+                    path_prepend: Vec::new(),
                     bootstrap: None,
                 },
                 CommandStep {
@@ -1759,6 +1855,7 @@ mod tests {
                     program: "ctest".to_string(),
                     args: vec!["--test-dir".to_string(), "/repo/build".to_string()],
                     env: BTreeMap::new(),
+                    path_prepend: Vec::new(),
                     bootstrap: None,
                 },
             ],

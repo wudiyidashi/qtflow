@@ -17,6 +17,8 @@ pub struct ResolvedConfig {
     pub tests: BTreeMap<String, TestPreset>,
     pub diagnostics: DiagnosticsConfig,
     pub source: ConfigSource,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -78,8 +80,12 @@ pub struct Profile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_name: Option<String>,
     pub configure_args: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub cache_variables: BTreeMap<String, String>,
     pub build_args: Vec<String>,
     pub ctest_args: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub path_prepend: Vec<PathBuf>,
     pub env: BTreeMap<String, String>,
 }
 

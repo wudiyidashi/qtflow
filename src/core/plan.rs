@@ -24,6 +24,8 @@ pub struct CommandStep {
     pub args: Vec<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub path_prepend: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bootstrap: Option<EnvironmentBootstrap>,
 }

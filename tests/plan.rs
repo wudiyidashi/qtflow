@@ -52,6 +52,7 @@ fn qtflow_json(args: &[&str]) -> Value {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -187,6 +188,7 @@ build_dir = "out/build/debug"
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -456,6 +458,7 @@ build_dir = "out/build/custom"
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -487,6 +490,7 @@ default_profile = "debug"
 [profiles.debug]
 build_dir = "build"
 generator = "Ninja"
+configure_args = ["-DCMAKE_MAKE_PROGRAM=ninja"]
 ctest_args = ["--output-on-failure"]
 
 [msvc]
@@ -501,6 +505,7 @@ enabled = false
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -517,6 +522,254 @@ enabled = false
     assert_eq!(json["steps"][0]["program"], "cmake");
     assert_eq!(
         json["steps"][0]["args"],
-        serde_json::json!(["-S", root, "-B", format!("{root}/build"), "-G", "Ninja"])
+        serde_json::json!([
+            "-S",
+            root,
+            "-B",
+            format!("{root}/build"),
+            "-G",
+            "Ninja",
+            "-DCMAKE_MAKE_PROGRAM=ninja"
+        ])
     );
+}
+
+#[test]
+fn configure_cache_variables_are_sorted_before_configure_args_for_preset() {
+    let temp = fixture_project_with_config(
+        r#"
+[tools]
+ninja = "C:/tools/ninja.exe"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+configure_args = ["-DCMAKE_PREFIX_PATH=override"]
+
+[profiles.debug.cache_variables]
+CMAKE_TOOLCHAIN_FILE = "x"
+CMAKE_PREFIX_PATH = "y"
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&["--project", project, "plan", "configure", "--json"]);
+
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!([
+            "--preset",
+            "Qt-Debug",
+            "-DCMAKE_PREFIX_PATH=y",
+            "-DCMAKE_TOOLCHAIN_FILE=x",
+            "-DCMAKE_PREFIX_PATH=override"
+        ])
+    );
+}
+
+#[test]
+fn configure_ninja_injects_make_program_after_cache_variables_without_preset() {
+    let temp = fixture_project_with_config(
+        r#"
+[tools]
+ninja = "C:/tools/ninja.exe"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "build"
+generator = "Ninja"
+configure_args = ["-DCMAKE_PREFIX_PATH=override"]
+
+[profiles.debug.cache_variables]
+CMAKE_TOOLCHAIN_FILE = "x"
+CMAKE_PREFIX_PATH = "y"
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&["--project", project, "plan", "configure", "--json"]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!([
+            "-S",
+            root,
+            "-B",
+            format!("{root}/build"),
+            "-G",
+            "Ninja",
+            "-DCMAKE_PREFIX_PATH=y",
+            "-DCMAKE_TOOLCHAIN_FILE=x",
+            "-DCMAKE_MAKE_PROGRAM=C:/tools/ninja.exe",
+            "-DCMAKE_PREFIX_PATH=override"
+        ])
+    );
+}
+
+#[test]
+fn configure_ninja_does_not_duplicate_make_program_from_cache_variables_or_preset() {
+    let non_preset = fixture_project_with_config(
+        r#"
+[tools]
+ninja = "C:/tools/ninja.exe"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "build"
+generator = "Ninja"
+
+[profiles.debug.cache_variables]
+CMAKE_MAKE_PROGRAM = "custom-ninja"
+"#,
+    );
+    let project = non_preset.path().to_str().unwrap();
+    let json = qtflow_json(&["--project", project, "plan", "configure", "--json"]);
+    let args = json["steps"][0]["args"].as_array().expect("args");
+
+    assert_eq!(
+        args.iter()
+            .filter(|arg| arg
+                .as_str()
+                .is_some_and(|arg| arg.contains("CMAKE_MAKE_PROGRAM")))
+            .count(),
+        1
+    );
+    assert!(args
+        .iter()
+        .any(|arg| arg == "-DCMAKE_MAKE_PROGRAM=custom-ninja"));
+
+    let preset = fixture_project_with_config(
+        r#"
+[tools]
+ninja = "C:/tools/ninja.exe"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+"#,
+    );
+    let project = preset.path().to_str().unwrap();
+    let json = qtflow_json(&["--project", project, "plan", "configure", "--json"]);
+
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!(["--preset", "Qt-Debug"])
+    );
+}
+
+#[test]
+fn plan_steps_include_path_prepend_from_qt_bin_dir_and_profile() {
+    let temp = fixture_project_with_config(
+        r#"
+[qt]
+bin_dir = "qt/bin"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+path_prepend = ["tools/bin", "C:/extra/bin"]
+ctest_args = []
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&["--project", project, "plan", "check", "foo", "--json"]);
+    let root = json["projectRoot"].as_str().expect("project root");
+    let expected = serde_json::json!([
+        format!("{root}/qt/bin"),
+        format!("{root}/tools/bin"),
+        "C:/extra/bin"
+    ]);
+
+    assert_eq!(json["steps"][0]["pathPrepend"], expected);
+    assert_eq!(json["steps"][1]["pathPrepend"], expected);
+}
+
+#[test]
+fn valid_config_does_not_emit_unknown_key_warning_and_empty_path_prepend_is_absent() {
+    let temp = fixture_project();
+    let project = temp.path().to_str().unwrap();
+
+    let output = Command::cargo_bin("qtflow")
+        .expect("binary")
+        .env_remove("QTFLOW_CONFIG")
+        .env_remove("QTFLOW_PROFILE")
+        .env_remove("QTFLOW_CMAKE")
+        .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
+        .env_remove("QTFLOW_QMAKE")
+        .env_remove("QTFLOW_VSDEVCMD_BAT")
+        .env_remove("VSDEVCMD_BAT")
+        .args(["--project", project, "plan", "check", "foo", "--json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("unknown key").not())
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+    assert!(json["steps"][0].get("pathPrepend").is_none());
+}
+
+#[test]
+fn unknown_config_key_warns_to_stderr_and_quiet_suppresses_it() {
+    let temp = fixture_project_with_config(
+        r#"
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+cmake_args = ["-DOPT=ON"]
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    Command::cargo_bin("qtflow")
+        .expect("binary")
+        .env_remove("QTFLOW_CONFIG")
+        .env_remove("QTFLOW_PROFILE")
+        .env_remove("QTFLOW_CMAKE")
+        .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
+        .env_remove("QTFLOW_QMAKE")
+        .env_remove("QTFLOW_VSDEVCMD_BAT")
+        .env_remove("VSDEVCMD_BAT")
+        .args(["--project", project, "plan", "configure"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "warning: unknown key 'cmake_args' in [profiles.debug] (ignored)",
+        ));
+
+    Command::cargo_bin("qtflow")
+        .expect("binary")
+        .env_remove("QTFLOW_CONFIG")
+        .env_remove("QTFLOW_PROFILE")
+        .env_remove("QTFLOW_CMAKE")
+        .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
+        .env_remove("QTFLOW_QMAKE")
+        .env_remove("QTFLOW_VSDEVCMD_BAT")
+        .env_remove("VSDEVCMD_BAT")
+        .args(["--project", project, "--quiet", "plan", "configure"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("unknown key").not());
 }

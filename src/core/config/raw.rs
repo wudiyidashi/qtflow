@@ -21,6 +21,8 @@ pub struct RawConfig {
     pub tests: BTreeMap<String, RawTestPreset>,
     #[serde(default)]
     pub diagnostics: Option<RawDiagnostics>,
+    #[serde(default, flatten)]
+    pub unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -36,6 +38,8 @@ pub struct RawTools {
     pub cmake: Option<String>,
     pub ctest: Option<String>,
     pub ninja: Option<String>,
+    #[serde(default, flatten)]
+    pub unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -44,12 +48,16 @@ pub struct RawMsvc {
     pub arch: Option<String>,
     pub host_arch: Option<String>,
     pub vsdevcmd: Option<PathBuf>,
+    #[serde(default, flatten)]
+    pub unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct RawQt {
     pub root: Option<PathBuf>,
     pub bin_dir: Option<PathBuf>,
+    #[serde(default, flatten)]
+    pub unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -60,6 +68,8 @@ pub struct RawQmake {
     pub pro_file: Option<PathBuf>,
     #[serde(default)]
     pub config_args: Option<Vec<String>>,
+    #[serde(default, flatten)]
+    pub unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -71,11 +81,17 @@ pub struct RawProfile {
     #[serde(default)]
     pub configure_args: Option<Vec<String>>,
     #[serde(default)]
+    pub cache_variables: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub path_prepend: Option<Vec<PathBuf>>,
+    #[serde(default)]
     pub build_args: Option<Vec<String>>,
     #[serde(default)]
     pub ctest_args: Option<Vec<String>>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    #[serde(default, flatten)]
+    pub unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -83,12 +99,59 @@ pub struct RawTestPreset {
     pub target: Option<String>,
     pub regex: Option<String>,
     pub profile: Option<String>,
+    #[serde(default, flatten)]
+    pub unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct RawDiagnostics {
     pub enabled: Option<bool>,
     pub max_log_bytes: Option<usize>,
+    #[serde(default, flatten)]
+    pub unknown: BTreeMap<String, toml::Value>,
+}
+
+impl RawConfig {
+    pub fn unknown_key_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        extend_unknown_warnings(&mut warnings, "", &self.unknown);
+        if let Some(tools) = &self.tools {
+            extend_unknown_warnings(&mut warnings, "tools", &tools.unknown);
+        }
+        if let Some(msvc) = &self.msvc {
+            extend_unknown_warnings(&mut warnings, "msvc", &msvc.unknown);
+        }
+        if let Some(qt) = &self.qt {
+            extend_unknown_warnings(&mut warnings, "qt", &qt.unknown);
+        }
+        if let Some(qmake) = &self.qmake {
+            extend_unknown_warnings(&mut warnings, "qmake", &qmake.unknown);
+        }
+        for (name, profile) in &self.profiles {
+            extend_unknown_warnings(&mut warnings, &format!("profiles.{name}"), &profile.unknown);
+        }
+        for (name, test) in &self.tests {
+            extend_unknown_warnings(&mut warnings, &format!("tests.{name}"), &test.unknown);
+        }
+        if let Some(diagnostics) = &self.diagnostics {
+            extend_unknown_warnings(&mut warnings, "diagnostics", &diagnostics.unknown);
+        }
+        warnings
+    }
+}
+
+fn extend_unknown_warnings(
+    warnings: &mut Vec<String>,
+    table: &str,
+    unknown: &BTreeMap<String, toml::Value>,
+) {
+    for key in unknown.keys() {
+        if table.is_empty() {
+            warnings.push(format!("unknown key '{key}' at top level (ignored)"));
+        } else {
+            warnings.push(format!("unknown key '{key}' in [{table}] (ignored)"));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +192,8 @@ build_dir = "out/build/debug"
 generator = "Ninja"
 config_name = "Debug"
 configure_args = []
+cache_variables = {}
+path_prepend = []
 build_args = []
 ctest_args = ["--output-on-failure"]
 
@@ -141,6 +206,8 @@ build_dir = "out/build/release"
 generator = "Ninja"
 config_name = "Release"
 configure_args = []
+cache_variables = {}
+path_prepend = []
 build_args = []
 ctest_args = ["--output-on-failure"]
 
@@ -172,5 +239,39 @@ max_log_bytes = 200000
             Some("Debug")
         );
         assert!(parsed.tests.contains_key("route_dispatcher"));
+        assert!(parsed.unknown_key_warnings().is_empty());
+    }
+
+    #[test]
+    fn collects_unknown_key_warnings_with_table_paths() {
+        let input = r#"
+unknown_root = true
+
+[tools]
+extra_tool = "x"
+
+[profiles.debug]
+build_dir = "build"
+cmake_args = ["-DOPT=ON"]
+
+[profiles.debug.env]
+FREE_FORM = "ok"
+
+[tests.smoke]
+regex = "smoke"
+typo = true
+"#;
+
+        let parsed: RawConfig = toml::from_str(input).expect("config parses");
+
+        assert_eq!(
+            parsed.unknown_key_warnings(),
+            vec![
+                "unknown key 'unknown_root' at top level (ignored)".to_string(),
+                "unknown key 'extra_tool' in [tools] (ignored)".to_string(),
+                "unknown key 'cmake_args' in [profiles.debug] (ignored)".to_string(),
+                "unknown key 'typo' in [tests.smoke] (ignored)".to_string()
+            ]
+        );
     }
 }

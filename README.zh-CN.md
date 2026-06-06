@@ -72,6 +72,9 @@ default_profile = "debug"
 preset = "Qt-Debug"          # 或省略 preset,用 build_dir + generator
 build_dir = "out/build/debug"
 generator = "Ninja"
+configure_args = []
+cache_variables = { CMAKE_TOOLCHAIN_FILE = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake", CMAKE_PREFIX_PATH = "C:/Qt/6.8.0/msvc2022_64" }
+path_prepend = ["C:/tools/bin"]
 ctest_args = ["--output-on-failure"]
 
 [profiles.release]
@@ -79,7 +82,26 @@ build_dir = "build-release"
 generator = "Ninja"
 ```
 
-环境变量:`QTFLOW_CONFIG`、`QTFLOW_PROFILE`、`QTFLOW_CMAKE`、`QTFLOW_CTEST`、`QTFLOW_VSDEVCMD_BAT`、`VSDEVCMD_BAT`。
+常用字段:
+
+- `[tools].ninja`: Ninja 可执行文件;解析优先级是 `[tools].ninja` → `QTFLOW_NINJA` → `PATH`。
+- `[qt].bin_dir`: 会被 prepend 到每个命令的 `PATH`,用于让测试进程找到 Qt DLL。
+- `[profiles.<name>].cache_variables`: 按 key 排序渲染成 `-DKEY=VALUE`,放在 `configure_args` 前面。可在不用 preset 时注入 vcpkg toolchain / Qt prefix。
+- `[profiles.<name>].configure_args`: 追加到 CMake configure 命令最后,因此可覆盖 `cache_variables`。
+- `[profiles.<name>].path_prepend`: 额外 prepend 到命令 `PATH` 的目录;相对路径按项目根解析。
+
+未知配置键会被忽略以保持向前兼容,但 qtflow 会向 stderr 输出告警;`--quiet` 会抑制告警。
+
+不用 preset 时注入 vcpkg 与 Qt 前缀示例:
+
+```toml
+[profiles.debug]
+build_dir = "build"
+generator = "Ninja"
+cache_variables = { CMAKE_TOOLCHAIN_FILE = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake", CMAKE_PREFIX_PATH = "C:/Qt/6.8.0/msvc2022_64" }
+```
+
+环境变量:`QTFLOW_CONFIG`、`QTFLOW_PROFILE`、`QTFLOW_CMAKE`、`QTFLOW_CTEST`、`QTFLOW_NINJA`、`QTFLOW_VSDEVCMD_BAT`、`VSDEVCMD_BAT`。
 
 ## 构建目录发现与 Visual Studio
 

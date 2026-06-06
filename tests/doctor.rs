@@ -62,6 +62,7 @@ build_dir = "build/release"
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -131,6 +132,7 @@ build_dir = "out/build/debug"
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -171,6 +173,7 @@ fn doctor_json_reports_presets_and_missing_probe_status() {
 [tools]
 cmake = "definitely-missing-cmake-for-doctor"
 ctest = "definitely-missing-ctest-for-doctor"
+ninja = "C:/tools/ninja.exe"
 
 [msvc]
 enabled = false
@@ -188,6 +191,7 @@ build_dir = "out/build/debug"
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -202,6 +206,9 @@ build_dir = "out/build/debug"
     let json: Value = serde_json::from_slice(&output).expect("valid JSON");
     assert_eq!(json["cmake"]["status"], "notFound");
     assert_eq!(json["ctest"]["status"], "notFound");
+    assert_eq!(json["ninja"]["path"], "C:/tools/ninja.exe");
+    assert_eq!(json["ninja"]["status"], "found");
+    assert_eq!(json["ninja"]["source"], "config");
     assert_eq!(json["cmakePresets"], serde_json::json!(["Qt-Debug"]));
 }
 
@@ -228,6 +235,7 @@ fn doctor_no_probe_json_reports_discovered_build_dirs_with_roles() {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -272,6 +280,7 @@ fn doctor_json_reports_build_dir_ambiguity_and_provenance() {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -321,6 +330,7 @@ fn doctor_text_reports_build_dir_ambiguity_with_vs_tag() {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -353,6 +363,7 @@ fn doctor_warns_when_profile_preset_is_not_in_presets_file() {
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")
@@ -402,6 +413,7 @@ ctest_args = ["--output-on-failure"]
         .env_remove("QTFLOW_PROFILE")
         .env_remove("QTFLOW_CMAKE")
         .env_remove("QTFLOW_CTEST")
+        .env_remove("QTFLOW_NINJA")
         .env_remove("QTFLOW_QMAKE")
         .env_remove("QTFLOW_VSDEVCMD_BAT")
         .env_remove("VSDEVCMD_BAT")

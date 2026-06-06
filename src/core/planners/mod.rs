@@ -29,8 +29,10 @@ pub struct PlanProfile {
     pub generator: Option<String>,
     pub config_name: Option<String>,
     pub configure_args: Vec<String>,
+    pub cache_variables: BTreeMap<String, String>,
     pub build_args: Vec<String>,
     pub ctest_args: Vec<String>,
+    pub path_prepend: Vec<String>,
     pub env: BTreeMap<String, String>,
 }
 
@@ -38,6 +40,7 @@ pub struct PlanProfile {
 pub struct PlanTools {
     pub cmake: String,
     pub ctest: String,
+    pub ninja: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +148,7 @@ fn step_with_cwd(
         program,
         args,
         env: ctx.active_profile.env.clone(),
+        path_prepend: ctx.active_profile.path_prepend.clone(),
         bootstrap: bootstrap(ctx),
     }
 }
@@ -219,13 +223,16 @@ pub(crate) mod test_support {
                 generator: None,
                 config_name: None,
                 configure_args: Vec::new(),
+                cache_variables: BTreeMap::new(),
                 build_args: Vec::new(),
                 ctest_args: Vec::new(),
+                path_prepend: Vec::new(),
                 env: BTreeMap::new(),
             },
             tools: PlanTools {
                 cmake: "cmake".to_string(),
                 ctest: "ctest".to_string(),
+                ninja: None,
             },
             qmake: PlanQmake {
                 qmake: "qmake".to_string(),

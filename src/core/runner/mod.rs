@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::process::{ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -53,6 +54,9 @@ pub fn execute_plan(plan: &CommandPlan, opts: &RunOptions) -> Result<RunOutcome,
     for step in &plan.steps {
         if opts.verbose && !opts.quiet {
             eprintln!("+ {}", render_command_display(step));
+            if !step.path_prepend.is_empty() {
+                eprintln!("  path-prepend: {}", step.path_prepend.join(", "));
+            }
         }
 
         let spec = command_for_step(step);
@@ -64,6 +68,7 @@ pub fn execute_plan(plan: &CommandPlan, opts: &RunOptions) -> Result<RunOutcome,
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .envs(&step.env);
+        apply_path_prepend(&mut command, &step.path_prepend, &step.env);
         apply_raw_arg(&mut command, spec.raw_arg.as_deref());
 
         let mut child = match command.spawn() {
@@ -188,6 +193,75 @@ fn join_reader(handle: Option<JoinHandle<io::Result<()>>>) -> Result<(), QtflowE
     }
 }
 
+fn apply_path_prepend(
+    command: &mut Command,
+    path_prepend: &[String],
+    step_env: &std::collections::BTreeMap<String, String>,
+) {
+    let path_key = path_env_key(step_env);
+    let existing = step_env
+        .get(&path_key)
+        .map(OsString::from)
+        .or_else(|| std::env::var_os(&path_key));
+    if let Some(path) = prepend_path_entries_os(path_prepend, existing) {
+        command.env(path_key, path);
+    }
+}
+
+fn prepend_path_entries_os(
+    path_prepend: &[String],
+    existing_path: Option<OsString>,
+) -> Option<OsString> {
+    let prefix = joined_path_prepend(path_prepend, PATH_SEPARATOR)?;
+    let mut value = OsString::from(prefix);
+    if let Some(existing_path) = existing_path.filter(|path| !path.is_empty()) {
+        value.push(PATH_SEPARATOR_STR);
+        value.push(existing_path);
+    }
+    Some(value)
+}
+
+#[cfg(test)]
+pub(crate) fn prepend_path_entries(
+    path_prepend: &[String],
+    existing_path: Option<&str>,
+    separator: char,
+) -> Option<String> {
+    let mut value = joined_path_prepend(path_prepend, separator)?;
+    if let Some(existing_path) = existing_path.filter(|path| !path.is_empty()) {
+        value.push(separator);
+        value.push_str(existing_path);
+    }
+    Some(value)
+}
+
+fn joined_path_prepend(path_prepend: &[String], separator: char) -> Option<String> {
+    let entries = path_prepend
+        .iter()
+        .filter(|entry| !entry.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    (!entries.is_empty()).then(|| entries.join(&separator.to_string()))
+}
+
+fn path_env_key(step_env: &std::collections::BTreeMap<String, String>) -> String {
+    step_env
+        .keys()
+        .find(|key| key.eq_ignore_ascii_case("PATH"))
+        .cloned()
+        .unwrap_or_else(|| "PATH".to_string())
+}
+
+#[cfg(windows)]
+const PATH_SEPARATOR: char = ';';
+#[cfg(not(windows))]
+const PATH_SEPARATOR: char = ':';
+
+#[cfg(windows)]
+const PATH_SEPARATOR_STR: &str = ";";
+#[cfg(not(windows))]
+const PATH_SEPARATOR_STR: &str = ":";
+
 #[derive(Debug, Clone)]
 struct CappedLog {
     bytes: Vec<u8>,
@@ -273,6 +347,7 @@ mod tests {
                 program,
                 args,
                 env: BTreeMap::new(),
+                path_prepend: Vec::new(),
                 bootstrap: None,
             }],
         }
@@ -337,6 +412,7 @@ mod tests {
                 program,
                 args,
                 env: BTreeMap::from([("QTFLOW_RUNNER_TEST_ENV".to_string(), "ok".to_string())]),
+                path_prepend: Vec::new(),
                 bootstrap: None,
             }],
         };
@@ -376,6 +452,7 @@ mod tests {
                 program,
                 args,
                 env: BTreeMap::new(),
+                path_prepend: Vec::new(),
                 bootstrap: None,
             }],
         };
@@ -430,6 +507,7 @@ mod tests {
                 program,
                 args,
                 env: BTreeMap::new(),
+                path_prepend: Vec::new(),
                 bootstrap: None,
             }],
         };
@@ -490,6 +568,7 @@ mod tests {
                     marker.to_string_lossy().to_string(),
                 ],
                 env: BTreeMap::new(),
+                path_prepend: Vec::new(),
                 bootstrap: Some(EnvironmentBootstrap::Msvc {
                     vsdevcmd,
                     arch: "x64".to_string(),
@@ -501,5 +580,25 @@ mod tests {
         let outcome = execute_plan(&plan, &RunOptions::default()).expect("execute plan");
 
         assert_eq!(outcome.last_exit_code, 0);
+    }
+
+    #[test]
+    fn path_composition_prepends_entries_and_preserves_existing_path() {
+        assert_eq!(
+            prepend_path_entries(
+                &["C:/Qt/bin".to_string(), "C:/tools/bin".to_string()],
+                Some("C:/Windows/System32"),
+                ';'
+            ),
+            Some("C:/Qt/bin;C:/tools/bin;C:/Windows/System32".to_string())
+        );
+    }
+
+    #[test]
+    fn path_composition_omits_separator_when_existing_path_is_empty() {
+        assert_eq!(
+            prepend_path_entries(&["/qt/bin".to_string()], Some(""), ':'),
+            Some("/qt/bin".to_string())
+        );
     }
 }
