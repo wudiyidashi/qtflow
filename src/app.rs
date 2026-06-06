@@ -23,9 +23,9 @@ use crate::core::diagnostics::{
     exit_code_override, CommandKind, DiagnosticContext, Engine, Platform,
 };
 use crate::core::init::{
-    apply_plan as apply_init_plan, detect_agents, init_json_report,
+    apply_plan as apply_init_plan, detect_agents, init_json_report, plan_actions_for_project,
     plan_global_codex_skill_actions, resolve_codex_skills_root, Agent, AgentSelection, InitAction,
-    InitConfigInputs, InitLayout, InitOptions, RealInitFileSystem,
+    InitConfigInputs, InitLayout, InitOptions, InitProjectInputs, RealInitFileSystem,
 };
 use crate::core::path::{path_to_slash, serialize_optional_path, serialize_path};
 use crate::core::plan::{CommandPlan, EnvironmentBootstrap};
@@ -363,6 +363,7 @@ fn run_planned_command(
         render_plan(&plan, global)?;
         Ok(())
     } else {
+        print_plan_notes(&plan, global);
         if !global.quiet {
             eprintln!("qtflow: running {command_name}");
         }
@@ -413,6 +414,7 @@ fn report_failed_step(
                 Engine::new(ctx.config.diagnostics.max_log_bytes).analyze(&DiagnosticContext {
                     exit_code: child_exit_code,
                     command_kind,
+                    project_kind: ctx.project.kind,
                     combined_log,
                     platform: Platform::current(),
                     bootstrap_used,
@@ -465,9 +467,8 @@ fn build_command_plan(
         ProjectKind::Qmake => match &plan_ctx.command {
             planners::PlanCommand::Configure(_) => planners::qmake_configure::plan(&plan_ctx),
             planners::PlanCommand::Build(_) => planners::qmake_build::plan(&plan_ctx),
-            planners::PlanCommand::Test(_) | planners::PlanCommand::Check(_) => {
-                Err(qmake_test_check_error())
-            }
+            planners::PlanCommand::Test(_) => planners::qmake_test::plan(&plan_ctx),
+            planners::PlanCommand::Check(_) => planners::qmake_check::plan(&plan_ctx),
         },
     }
 }
@@ -512,12 +513,6 @@ fn build_plan_context(ctx: &AppContext, invocation: &PlanInvocation) -> PlanCont
         command: invocation
             .plan_command_with_profile_config_name(active_profile.config_name.as_deref()),
     }
-}
-
-fn qmake_test_check_error() -> QtflowError {
-    QtflowError::ConfigOrArg(
-        "qmake test/check not yet supported (coming in next phase)".to_string(),
-    )
 }
 
 fn resolved_ninja_for_plan(ctx: &AppContext) -> Option<PathBuf> {
@@ -796,6 +791,18 @@ fn print_plan_text(plan: &CommandPlan) {
             println!("  path-prepend: {}", step.path_prepend.join(", "));
         }
     }
+    for note in &plan.notes {
+        println!("note: {note}");
+    }
+}
+
+fn print_plan_notes(plan: &CommandPlan, global: &GlobalInvocation) {
+    if global.quiet || global.json {
+        return;
+    }
+    for note in &plan.notes {
+        eprintln!("note: {note}");
+    }
 }
 
 fn run_init(global: &GlobalInvocation, args: &InitInvocation) -> Result<(), QtflowError> {
@@ -830,8 +837,18 @@ fn run_init(global: &GlobalInvocation, args: &InitInvocation) -> Result<(), Qtfl
             discovered_build_dirs,
             presets,
         };
-        crate::core::init::plan_actions(&project.root, &opts, &detected, &fs, &inputs)
-            .map_err(|err| QtflowError::ConfigOrArg(err.to_string()))?
+        plan_actions_for_project(
+            &project.root,
+            &opts,
+            &detected,
+            &fs,
+            &inputs,
+            &InitProjectInputs {
+                kind: project.kind,
+                project_file: project.project_file.clone(),
+            },
+        )
+        .map_err(|err| QtflowError::ConfigOrArg(err.to_string()))?
     } else {
         crate::core::init::InitPlan {
             project_root: start.clone(),
@@ -1839,6 +1856,7 @@ mod tests {
         CommandPlan {
             project_root: PathBuf::from("/repo"),
             profile: "debug".to_string(),
+            notes: Vec::new(),
             steps: vec![
                 CommandStep {
                     label: "build".to_string(),

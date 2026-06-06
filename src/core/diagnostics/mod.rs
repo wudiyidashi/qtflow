@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::core::project::ProjectKind;
+
 pub mod report;
 pub mod rules;
 
@@ -49,6 +51,7 @@ impl Platform {
 pub struct DiagnosticContext<'a> {
     pub exit_code: i32,
     pub command_kind: CommandKind,
+    pub project_kind: ProjectKind,
     pub combined_log: &'a str,
     pub platform: Platform,
     pub bootstrap_used: bool,
@@ -60,6 +63,7 @@ pub struct Rule {
     pub severity: Severity,
     pub patterns: &'static [&'static str],
     pub applies_to: &'static [CommandKind],
+    pub project_kinds: &'static [ProjectKind],
     pub title: &'static str,
     pub explanation: &'static str,
     pub suggested: &'static [&'static str],
@@ -91,6 +95,7 @@ impl Engine {
         rules::RULES
             .iter()
             .filter(|rule| rule.applies_to.contains(&ctx.command_kind))
+            .filter(|rule| rule.project_kinds.contains(&ctx.project_kind))
             .filter_map(|rule| finding_for_rule(rule, log))
             .collect()
     }
@@ -123,7 +128,10 @@ pub fn exit_code_override(findings: &[Finding], bootstrap_used: bool) -> Option<
     if findings.iter().any(|finding| {
         matches!(
             finding.code.as_str(),
-            "tool.cmake_not_found" | "tool.ctest_not_found"
+            "tool.cmake_not_found"
+                | "tool.ctest_not_found"
+                | "qmake.not_found"
+                | "make.tool_not_found"
         )
     }) {
         return Some(3);
@@ -184,9 +192,21 @@ mod tests {
         DiagnosticContext {
             exit_code: 1,
             command_kind,
+            project_kind: ProjectKind::Cmake,
             combined_log: log,
             platform: Platform::Windows,
             bootstrap_used: false,
+        }
+    }
+
+    fn project_ctx(
+        project_kind: ProjectKind,
+        command_kind: CommandKind,
+        log: &str,
+    ) -> DiagnosticContext<'_> {
+        DiagnosticContext {
+            project_kind,
+            ..ctx(command_kind, log)
         }
     }
 
@@ -223,10 +243,30 @@ mod tests {
                 "No such file or directory: ctest\n",
                 "tool.ctest_not_found",
             ),
+            (
+                CommandKind::Configure,
+                "qmake: command not found\n",
+                "qmake.not_found",
+            ),
+            (
+                CommandKind::Configure,
+                "Could not find qmake configuration file win32-msvc\n",
+                "qmake.spec_missing",
+            ),
+            (
+                CommandKind::Build,
+                "'nmake' is not recognized as an internal or external command\n",
+                "make.tool_not_found",
+            ),
         ];
 
         for (kind, log, code) in cases {
-            let findings = Engine::default().analyze(&ctx(kind, log));
+            let project_kind = if code.starts_with("qmake.") || code.starts_with("make.") {
+                ProjectKind::Qmake
+            } else {
+                ProjectKind::Cmake
+            };
+            let findings = Engine::default().analyze(&project_ctx(project_kind, kind, log));
 
             let finding = findings
                 .iter()
@@ -255,6 +295,27 @@ mod tests {
     }
 
     #[test]
+    fn project_kind_filters_cmake_and_qmake_specific_rules() {
+        let qmake_findings = Engine::default().analyze(&project_ctx(
+            ProjectKind::Qmake,
+            CommandKind::Build,
+            "Error: could not load cache\n",
+        ));
+        assert!(qmake_findings
+            .iter()
+            .all(|finding| finding.code != "cmake.build_dir_missing"));
+
+        let cmake_findings = Engine::default().analyze(&project_ctx(
+            ProjectKind::Cmake,
+            CommandKind::Configure,
+            "Could not find qmake configuration file win32-msvc\n",
+        ));
+        assert!(cmake_findings
+            .iter()
+            .all(|finding| finding.code != "qmake.spec_missing"));
+    }
+
+    #[test]
     fn exit_override_maps_known_setup_and_tool_failures() {
         let vsdevcmd = Finding {
             code: "msvc.vsdevcmd_not_found".to_string(),
@@ -272,6 +333,10 @@ mod tests {
             code: "tool.cmake_not_found".to_string(),
             ..vsdevcmd.clone()
         };
+        let qmake = Finding {
+            code: "qmake.not_found".to_string(),
+            ..vsdevcmd.clone()
+        };
 
         assert_eq!(exit_code_override(&[vsdevcmd], true), Some(6));
         assert_eq!(
@@ -280,6 +345,7 @@ mod tests {
         );
         assert_eq!(exit_code_override(&[headers], true), None);
         assert_eq!(exit_code_override(&[cmake], false), Some(3));
+        assert_eq!(exit_code_override(&[qmake], false), Some(3));
         assert_eq!(exit_code_override(&[], false), None);
     }
 }

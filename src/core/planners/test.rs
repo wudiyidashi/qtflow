@@ -35,6 +35,7 @@ pub fn plan(ctx: &PlanContext) -> Result<CommandPlan, QtflowError> {
     Ok(CommandPlan {
         project_root: ctx.project_root.clone(),
         profile: ctx.profile.clone(),
+        notes: Vec::new(),
         steps,
     })
 }

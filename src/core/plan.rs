@@ -11,6 +11,8 @@ pub struct CommandPlan {
     #[serde(serialize_with = "serialize_path")]
     pub project_root: PathBuf,
     pub profile: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     pub steps: Vec<CommandStep>,
 }
 

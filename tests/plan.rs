@@ -169,10 +169,16 @@ build_dir = "out/build/debug"
 }
 
 #[test]
-fn qmake_plan_test_is_not_yet_supported() {
+fn qmake_plan_test_json_runs_make_check() {
     let temp = qmake_fixture_project(
         r#"
 build_system = "qmake"
+
+[qmake]
+make = "make"
+
+[qt]
+bin_dir = "qt/bin"
 
 [msvc]
 enabled = false
@@ -181,24 +187,128 @@ enabled = false
 build_dir = "out/build/debug"
 "#,
     );
+    let project = temp.path().to_str().unwrap();
 
-    Command::cargo_bin("qtflow")
-        .expect("binary")
-        .env_remove("QTFLOW_CONFIG")
-        .env_remove("QTFLOW_PROFILE")
-        .env_remove("QTFLOW_CMAKE")
-        .env_remove("QTFLOW_CTEST")
-        .env_remove("QTFLOW_NINJA")
-        .env_remove("QTFLOW_QMAKE")
-        .env_remove("QTFLOW_VSDEVCMD_BAT")
-        .env_remove("VSDEVCMD_BAT")
-        .args(["--project", temp.path().to_str().unwrap()])
-        .args(["plan", "test", "smoke"])
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains(
-            "qmake test/check not yet supported (coming in next phase)",
-        ));
+    let json = qtflow_json(&["--project", project, "plan", "test", "smoke", "--json"]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(json["steps"].as_array().expect("steps").len(), 1);
+    assert_eq!(json["steps"][0]["label"], "test");
+    assert_eq!(json["steps"][0]["program"], "make");
+    assert_eq!(json["steps"][0]["cwd"], root);
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!(["-C", format!("{root}/out/build/debug"), "check"])
+    );
+    assert_eq!(
+        json["steps"][0]["pathPrepend"],
+        serde_json::json!([format!("{root}/qt/bin")])
+    );
+    assert_eq!(
+        json["notes"],
+        serde_json::json!([
+            "qmake runs all tests exposed by the generated Makefile check target; regex 'smoke' is ignored."
+        ])
+    );
+}
+
+#[test]
+fn qmake_plan_test_with_build_target_has_build_then_check_steps() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[qmake]
+make = "make"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&[
+        "--project",
+        project,
+        "plan",
+        "test",
+        "--build-target",
+        "app_test",
+        "--json",
+    ]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(json["steps"].as_array().expect("steps").len(), 2);
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!(["-C", format!("{root}/out/build/debug"), "app_test"])
+    );
+    assert_eq!(
+        json["steps"][1]["args"],
+        serde_json::json!(["-C", format!("{root}/out/build/debug"), "check"])
+    );
+}
+
+#[test]
+fn qmake_plan_check_json_builds_target_then_runs_make_check() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[qmake]
+make = "make"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let json = qtflow_json(&["--project", project, "plan", "check", "foo", "--json"]);
+    let root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(json["steps"].as_array().expect("steps").len(), 2);
+    assert_eq!(json["steps"][0]["label"], "build");
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!(["-C", format!("{root}/out/build/debug"), "foo"])
+    );
+    assert_eq!(json["steps"][1]["label"], "test");
+    assert_eq!(
+        json["steps"][1]["args"],
+        serde_json::json!(["-C", format!("{root}/out/build/debug"), "check"])
+    );
+    assert!(json.get("notes").is_none());
+}
+
+#[test]
+fn qmake_check_dry_run_json_matches_plan_json() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[qmake]
+make = "make"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    );
+    let project = temp.path().to_str().unwrap();
+
+    let plan = qtflow_json(&["--project", project, "plan", "check", "foo", "--json"]);
+    let dry_run = qtflow_json(&["--project", project, "check", "foo", "--dry-run", "--json"]);
+
+    assert_eq!(dry_run, plan);
 }
 
 #[test]
@@ -670,7 +780,12 @@ build_dir = "out/build/debug"
 
 #[test]
 fn plan_steps_include_path_prepend_from_qt_bin_dir_and_profile() {
-    let temp = fixture_project_with_config(
+    let abs_extra = if cfg!(windows) {
+        "C:/extra/bin"
+    } else {
+        "/extra/bin"
+    };
+    let config = format!(
         r#"
 [qt]
 bin_dir = "qt/bin"
@@ -681,10 +796,11 @@ enabled = false
 [profiles.debug]
 preset = "Qt-Debug"
 build_dir = "out/build/debug"
-path_prepend = ["tools/bin", "C:/extra/bin"]
+path_prepend = ["tools/bin", "{abs_extra}"]
 ctest_args = []
-"#,
+"#
     );
+    let temp = fixture_project_with_config(&config);
     let project = temp.path().to_str().unwrap();
 
     let json = qtflow_json(&["--project", project, "plan", "check", "foo", "--json"]);
@@ -692,7 +808,7 @@ ctest_args = []
     let expected = serde_json::json!([
         format!("{root}/qt/bin"),
         format!("{root}/tools/bin"),
-        "C:/extra/bin"
+        abs_extra
     ]);
 
     assert_eq!(json["steps"][0]["pathPrepend"], expected);

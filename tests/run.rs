@@ -20,6 +20,17 @@ fn fixture_project(config: &str) -> tempfile::TempDir {
     temp
 }
 
+fn qmake_fixture_project(config: &str) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("app.pro"),
+        "TEMPLATE = app\nCONFIG += testcase\n",
+    )
+    .expect("write pro");
+    std::fs::write(temp.path().join(".qtflow.toml"), config).expect("write config");
+    temp
+}
+
 fn fixture_project_with_cmake_stub(stub: CmakeStub) -> tempfile::TempDir {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(
@@ -180,5 +191,59 @@ build_dir = "out/build/debug"
         .code(3)
         .stderr(predicate::str::contains(
             "diagnostic: CMake executable was not found",
+        ));
+}
+
+#[test]
+fn missing_qmake_tool_maps_to_exit_three_with_qmake_diagnostic() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[qmake]
+qmake = "definitely-missing-qmake-executable"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    );
+
+    clean_qtflow()
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["configure"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "diagnostic: qmake executable was not found",
+        ));
+}
+
+#[test]
+fn missing_qmake_make_tool_maps_to_exit_three_with_make_diagnostic() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[qmake]
+make = "definitely-missing-qmake-make-tool"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    );
+
+    clean_qtflow()
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["check", "app"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "diagnostic: qmake make tool was not found",
         ));
 }

@@ -190,6 +190,8 @@ Key options:
 - `--parallel <n>`: build parallelism when `--build-target` is used.
 - `--no-msvc-bootstrap`, `--vsdevcmd <path>`: MSVC bootstrap controls.
 
+For qmake projects, `test` runs the generated Makefile `check` target (`make -C <build_dir> check`, or `nmake check`/`jom check` from the build directory). qmake has no CTest-style regex filtering, so qtflow emits a plan note and ignores `<regex>`.
+
 ### check
 
 Builds a target, then runs the matching CTest. By default, the CTest regex is the target name.
@@ -210,6 +212,8 @@ Key options:
 - `--parallel <n>`: build parallelism.
 - `--ctest-arg <arg>`: append an extra CTest argument; repeatable.
 - `--no-msvc-bootstrap`, `--vsdevcmd <path>`: MSVC bootstrap controls.
+
+For qmake projects, `check` builds `<target>` with the configured make tool and then runs the generated Makefile `check` target. `--test-regex` is ignored with the same qmake regex note.
 
 ### plan
 
@@ -447,6 +451,10 @@ Rule codes:
 - `tool.ctest_not_found`: CTest executable could not be started.
 - `qt.runtime_dll_missing`: Qt runtime DLLs are missing at test time.
 - `ctest.no_tests_matched`: CTest ran but matched no tests.
+- `qmake.not_found`: qmake executable could not be started.
+- `qmake.conda_qmake`: qmake output suggests a conda/anaconda qmake was selected.
+- `qmake.spec_missing`: qmake mkspec is missing or invalid.
+- `make.tool_not_found`: qmake make tool such as `nmake`, `jom`, or `mingw32-make` could not be started.
 
 ## Exit Codes
 

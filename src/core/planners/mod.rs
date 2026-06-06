@@ -8,7 +8,9 @@ pub mod build;
 pub mod check;
 pub mod configure;
 pub mod qmake_build;
+pub mod qmake_check;
 pub mod qmake_configure;
+pub mod qmake_test;
 pub mod test;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

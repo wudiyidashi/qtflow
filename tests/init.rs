@@ -24,6 +24,16 @@ fn fixture_repo() -> tempfile::TempDir {
     temp
 }
 
+fn qmake_fixture_repo() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("app.pro"),
+        "TEMPLATE = app\nCONFIG += testcase\n",
+    )
+    .expect("write pro");
+    temp
+}
+
 fn empty_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("tempdir")
 }
@@ -519,6 +529,72 @@ fn init_defaults_are_last_resort_and_warn_to_verify() {
     assert_eq!(config["source"], "defaults");
     assert!(content.contains(r#"build_dir = "out/build/debug""#));
     assert!(content.contains("verify for your project"));
+}
+
+#[test]
+fn init_qmake_project_generates_qmake_config_and_rerun_skips() {
+    let temp = qmake_fixture_repo();
+
+    let output = clean_qtflow()
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["init", "--config-only", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+    let config = temp.path().join(".qtflow.toml");
+
+    assert!(config.is_file());
+    assert_eq!(json["actions"][0]["source"], "qmake defaults");
+    let content = std::fs::read_to_string(&config).expect("config");
+    assert!(content.contains("# qtflow qmake starter config"));
+    assert!(content.contains(r#"build_system = "qmake""#));
+    assert!(content.contains("[qmake]"));
+    assert!(content.contains(r#"pro_file = "app.pro""#));
+    assert!(content.contains(r#"spec = """#));
+    assert!(content.contains(r#"make = """#));
+    assert!(content.contains("[profiles.debug]"));
+    assert!(content.contains(r#"build_dir = "build/debug""#));
+    assert!(content.contains("[profiles.release]"));
+    assert!(content.contains(r#"build_dir = "build/release""#));
+    assert!(!content.contains("preset ="));
+    assert!(!content.contains("ctest_args"));
+
+    let rerun = clean_qtflow()
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["init", "--config-only", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rerun_json: Value = serde_json::from_slice(&rerun).expect("valid JSON");
+    assert_eq!(rerun_json["actions"][0]["status"], "skipped");
+}
+
+#[test]
+fn init_qmake_dry_run_writes_nothing() {
+    let temp = qmake_fixture_repo();
+
+    let output = clean_qtflow()
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["--dry-run", "--json", "init", "--config-only"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).expect("valid JSON");
+    let content = json["actions"][0]["content"]
+        .as_str()
+        .expect("config content");
+
+    assert_eq!(json["actions"][0]["status"], "would_create");
+    assert_eq!(json["actions"][0]["source"], "qmake defaults");
+    assert!(content.contains(r#"build_system = "qmake""#));
+    assert!(!temp.path().join(".qtflow.toml").exists());
 }
 
 #[test]

@@ -341,6 +341,7 @@ mod tests {
         CommandPlan {
             project_root: std::env::current_dir().expect("cwd"),
             profile: "debug".to_string(),
+            notes: Vec::new(),
             steps: vec![CommandStep {
                 label: "test".to_string(),
                 cwd: std::env::current_dir().expect("cwd"),
@@ -406,6 +407,7 @@ mod tests {
         let plan = CommandPlan {
             project_root: cwd.clone(),
             profile: "debug".to_string(),
+            notes: Vec::new(),
             steps: vec![CommandStep {
                 label: "env".to_string(),
                 cwd,
@@ -446,6 +448,7 @@ mod tests {
         let plan = CommandPlan {
             project_root: cwd.clone(),
             profile: "debug".to_string(),
+            notes: Vec::new(),
             steps: vec![CommandStep {
                 label: "build".to_string(),
                 cwd,
@@ -478,6 +481,7 @@ mod tests {
     #[test]
     fn captured_failure_log_can_feed_diagnostics_engine() {
         use crate::core::diagnostics::{CommandKind, DiagnosticContext, Engine, Platform};
+        use crate::core::project::ProjectKind;
 
         let cwd = std::env::current_dir().expect("cwd");
         #[cfg(windows)]
@@ -501,6 +505,7 @@ mod tests {
         let plan = CommandPlan {
             project_root: cwd.clone(),
             profile: "debug".to_string(),
+            notes: Vec::new(),
             steps: vec![CommandStep {
                 label: "build".to_string(),
                 cwd,
@@ -524,6 +529,7 @@ mod tests {
         let findings = Engine::default().analyze(&DiagnosticContext {
             exit_code: outcome.last_exit_code,
             command_kind: CommandKind::from_label(&failure.step_label).expect("kind"),
+            project_kind: ProjectKind::Cmake,
             combined_log: &failure.combined_log,
             platform: Platform::current(),
             bootstrap_used: failure.bootstrap_used,
@@ -556,6 +562,7 @@ mod tests {
         let plan = CommandPlan {
             project_root: temp.path().to_path_buf(),
             profile: "debug".to_string(),
+            notes: Vec::new(),
             steps: vec![CommandStep {
                 label: "bootstrap".to_string(),
                 cwd: temp.path().to_path_buf(),

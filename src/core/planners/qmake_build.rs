@@ -18,11 +18,30 @@ pub fn plan(ctx: &PlanContext) -> Result<CommandPlan, QtflowError> {
     Ok(CommandPlan {
         project_root: ctx.project_root.clone(),
         profile: ctx.profile.clone(),
+        notes: Vec::new(),
         steps: vec![qmake_build_step(ctx, &build_dir, target)],
     })
 }
 
-fn qmake_build_step(ctx: &PlanContext, build_dir: &Path, target: Option<&str>) -> CommandStep {
+pub(super) fn qmake_build_step(
+    ctx: &PlanContext,
+    build_dir: &Path,
+    target: Option<&str>,
+) -> CommandStep {
+    qmake_make_step(ctx, "build", build_dir, target, true)
+}
+
+pub(super) fn qmake_check_step(ctx: &PlanContext, build_dir: &Path) -> CommandStep {
+    qmake_make_step(ctx, "test", build_dir, Some("check"), false)
+}
+
+fn qmake_make_step(
+    ctx: &PlanContext,
+    label: &str,
+    build_dir: &Path,
+    target: Option<&str>,
+    include_build_args: bool,
+) -> CommandStep {
     let make_name = make_tool_name(&ctx.qmake.make);
     let mut args = if make_name == "nmake" || make_name == "jom" {
         Vec::new()
@@ -32,7 +51,9 @@ fn qmake_build_step(ctx: &PlanContext, build_dir: &Path, target: Option<&str>) -
     if let Some(target) = target {
         args.push(target.to_string());
     }
-    args.extend(ctx.active_profile.build_args.clone());
+    if include_build_args {
+        args.extend(ctx.active_profile.build_args.clone());
+    }
 
     let cwd = if make_name == "nmake" || make_name == "jom" {
         build_dir.to_path_buf()
@@ -40,10 +61,10 @@ fn qmake_build_step(ctx: &PlanContext, build_dir: &Path, target: Option<&str>) -
         ctx.project_root.clone()
     };
 
-    step_with_cwd(ctx, "build", cwd, ctx.qmake.make.clone(), args)
+    step_with_cwd(ctx, label, cwd, ctx.qmake.make.clone(), args)
 }
 
-fn effective_build_dir(ctx: &PlanContext, override_dir: Option<&Path>) -> PathBuf {
+pub(super) fn effective_build_dir(ctx: &PlanContext, override_dir: Option<&Path>) -> PathBuf {
     match override_dir {
         Some(path) if path.is_absolute() => path.to_path_buf(),
         Some(path) => ctx.project_root.join(path),
