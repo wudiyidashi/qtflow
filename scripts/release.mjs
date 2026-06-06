@@ -354,9 +354,12 @@ function printBumpSummary(beforeFields, afterFields, changes) {
 function runGitRelease(version, push) {
   runCommand("git", ["add", "-A"]);
   runCommand("git", ["commit", "-m", `release: v${version}`]);
-  runCommand("git", ["tag", `v${version}`]);
+  runCommand("git", ["tag", "-a", `v${version}`, "-m", `v${version}`]);
   if (push) {
-    runCommand("git", ["push", "--follow-tags"]);
+    // Push branch and tag explicitly. (A lightweight tag is NOT pushed by
+    // `git push --follow-tags`, which would silently skip the release trigger.)
+    runCommand("git", ["push", "origin", "HEAD"]);
+    runCommand("git", ["push", "origin", `v${version}`]);
   }
 }
 
@@ -366,15 +369,15 @@ function nextSteps(version, committed, pushed) {
     if (pushed) {
       console.log(`Pushed release commit and tag v${version}. Wait for the GitHub Release workflow, then publish npm packages.`);
     } else {
-      console.log(`Created release commit and tag v${version}. Next: git push --follow-tags`);
+      console.log(`Created release commit and tag v${version}. Next: git push origin HEAD && git push origin v${version}`);
     }
     return;
   }
 
   console.log("Next steps:");
   console.log("  1. Review the version changes.");
-  console.log(`  2. Commit and tag: git add -A && git commit -m "release: v${version}" && git tag v${version}`);
-  console.log("  3. Push the tag: git push --follow-tags");
+  console.log(`  2. Commit and tag: git add -A && git commit -m "release: v${version}" && git tag -a v${version} -m v${version}`);
+  console.log(`  3. Push: git push origin HEAD && git push origin v${version}`);
   console.log(`  4. After the GitHub Release workflow finishes, publish: node scripts/release.mjs publish ${version}`);
 }
 
@@ -428,7 +431,16 @@ function createNpmEnv() {
 
 function ghReleaseDownload(version, distDir) {
   fs.mkdirSync(distDir, { recursive: true });
-  runCommand("gh", ["release", "download", `v${version}`, "--dir", distDir]);
+  // `--clobber` so re-running publish (e.g. after a dry-run) overwrites stale
+  // archives instead of failing on already-existing files.
+  runCommand("gh", [
+    "release",
+    "download",
+    `v${version}`,
+    "--dir",
+    distDir,
+    "--clobber",
+  ]);
 }
 
 function populateBinaries(version, distDir) {
@@ -442,7 +454,8 @@ function populateBinaries(version, distDir) {
 }
 
 function publishPackage(packageDir, options, npmEnv) {
-  const args = ["publish", packageDir, "--access", "public"];
+  // `npm publish` takes the package DIRECTORY, not the package.json path.
+  const args = ["publish", path.dirname(packageDir), "--access", "public"];
   if (options.otp) {
     args.push("--otp", options.otp);
   }
