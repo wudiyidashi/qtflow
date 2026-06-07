@@ -1,6 +1,6 @@
 {
   "name": "qtflow",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A Qt/CMake workflow CLI for configure, build, test, and check commands.",
   "license": "UNLICENSED",
   "repository": {
@@ -15,10 +15,10 @@
     "README.md"
   ],
   "optionalDependencies": {
-    "@xehxx/qtflow-cli-win32-x64": "0.2.0",
-    "@xehxx/qtflow-cli-linux-x64": "0.2.0",
-    "@xehxx/qtflow-cli-darwin-x64": "0.2.0",
-    "@xehxx/qtflow-cli-darwin-arm64": "0.2.0"
+    "@xehxx/qtflow-cli-win32-x64": "0.3.0",
+    "@xehxx/qtflow-cli-linux-x64": "0.3.0",
+    "@xehxx/qtflow-cli-darwin-x64": "0.3.0",
+    "@xehxx/qtflow-cli-darwin-arm64": "0.3.0"
   },
   "engines": {
     "node": ">=14"
