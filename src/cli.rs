@@ -80,6 +80,8 @@ pub enum Command {
     Test(TestArgs),
     #[command(about = "Build the target, then run the matching CTest.")]
     Check(CheckArgs),
+    #[command(about = "Bundle Qt runtime files next to a built executable.")]
+    Deploy(DeployArgs),
     #[command(about = "Render a command plan without executing it.")]
     Plan {
         #[command(subcommand)]
@@ -350,6 +352,67 @@ pub struct CheckArgs {
     pub vsdevcmd: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Args, Default)]
+pub struct DeployArgs {
+    #[arg(
+        value_name = "target",
+        help = "Build target whose executable should be deployed"
+    )]
+    pub target: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "path",
+        help = "Explicit executable or .app bundle to deploy"
+    )]
+    pub exe: Option<PathBuf>,
+
+    #[arg(
+        long,
+        conflicts_with = "debug",
+        help = "Deploy release Qt runtime files"
+    )]
+    pub release: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "release",
+        help = "Deploy debug Qt runtime files"
+    )]
+    pub debug: bool,
+
+    #[arg(
+        long,
+        value_name = "dir",
+        help = "QML source directory passed to the Qt deployment tool"
+    )]
+    pub qmldir: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "path",
+        help = "Deployment output directory; defaults to next to the executable"
+    )]
+    pub dir: Option<PathBuf>,
+
+    #[arg(
+        long = "deploy-arg",
+        value_name = "arg",
+        allow_hyphen_values = true,
+        help = "Extra argument passed through to the Qt deployment tool; repeatable"
+    )]
+    pub deploy_arg: Vec<String>,
+
+    #[arg(
+        long = "no-msvc-bootstrap",
+        help = "Do not initialize the MSVC environment via VsDevCmd"
+    )]
+    pub no_msvc_bootstrap: bool,
+
+    #[arg(long, value_name = "path", help = "Explicit VsDevCmd.bat path")]
+    pub vsdevcmd: Option<PathBuf>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum PlanCommand {
     #[command(about = "Render the CMake configure plan.")]
@@ -360,4 +423,6 @@ pub enum PlanCommand {
     Test(TestArgs),
     #[command(about = "Render the build-then-CTest check plan.")]
     Check(CheckArgs),
+    #[command(about = "Render the Qt deployment plan.")]
+    Deploy(DeployArgs),
 }

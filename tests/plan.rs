@@ -66,6 +66,26 @@ fn qtflow_json(args: &[&str]) -> Value {
     serde_json::from_slice(&output).expect("valid JSON")
 }
 
+#[cfg(windows)]
+const DEPLOY_TOOL_NAME: &str = "windeployqt.exe";
+#[cfg(target_os = "macos")]
+const DEPLOY_TOOL_NAME: &str = "macdeployqt";
+#[cfg(not(any(windows, target_os = "macos")))]
+const DEPLOY_TOOL_NAME: &str = "windeployqt.exe";
+
+#[cfg(windows)]
+const DEPLOY_EXE_SUFFIX: &str = ".exe";
+#[cfg(not(windows))]
+const DEPLOY_EXE_SUFFIX: &str = "";
+
+fn make_deploy_tool(root: &std::path::Path) -> std::path::PathBuf {
+    let qt_bin = root.join("qt").join("bin");
+    std::fs::create_dir_all(&qt_bin).expect("qt bin");
+    let tool = qt_bin.join(DEPLOY_TOOL_NAME);
+    std::fs::write(&tool, "").expect("deploy tool");
+    tool
+}
+
 #[test]
 fn qmake_plan_build_json_uses_make_tool_shape() {
     let temp = qmake_fixture_project(
@@ -309,6 +329,205 @@ build_dir = "out/build/debug"
     let dry_run = qtflow_json(&["--project", project, "check", "foo", "--dry-run", "--json"]);
 
     assert_eq!(dry_run, plan);
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn deploy_plan_json_uses_resolved_tool_and_bin_executable() {
+    let temp = fixture_project_with_config(
+        r#"
+[qt]
+bin_dir = "qt/bin"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+"#,
+    );
+    let root = temp.path();
+    make_deploy_tool(root);
+    let exe = root
+        .join("out")
+        .join("build")
+        .join("debug")
+        .join("bin")
+        .join(format!("app{DEPLOY_EXE_SUFFIX}"));
+    std::fs::create_dir_all(exe.parent().expect("exe parent")).expect("exe dir");
+    std::fs::write(&exe, "").expect("exe");
+
+    let json = qtflow_json(&[
+        "--project",
+        root.to_str().unwrap(),
+        "plan",
+        "deploy",
+        "app",
+        "--json",
+    ]);
+    let project_root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(json["steps"][0]["label"], "deploy");
+    assert_eq!(
+        json["steps"][0]["program"],
+        format!("{project_root}/qt/bin/{DEPLOY_TOOL_NAME}")
+    );
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!([
+            format!("{project_root}/out/build/debug/bin/app{DEPLOY_EXE_SUFFIX}"),
+            "--debug"
+        ])
+    );
+    assert_eq!(
+        json["steps"][0]["pathPrepend"],
+        serde_json::json!([format!("{project_root}/qt/bin")])
+    );
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn deploy_plan_supports_release_qmldir_dir_deploy_arg_and_exe_override() {
+    let temp = fixture_project_with_config(
+        r#"
+[qt]
+bin_dir = "qt/bin"
+
+[msvc]
+enabled = false
+
+[profiles.release]
+preset = "Qt-Release"
+build_dir = "out/build/release"
+"#,
+    );
+    let root = temp.path();
+    make_deploy_tool(root);
+    let exe = root
+        .join("custom")
+        .join(format!("custom-app{DEPLOY_EXE_SUFFIX}"));
+    std::fs::create_dir_all(exe.parent().expect("exe parent")).expect("exe dir");
+    std::fs::write(&exe, "").expect("exe");
+
+    let json = qtflow_json(&[
+        "--project",
+        root.to_str().unwrap(),
+        "--profile",
+        "release",
+        "plan",
+        "deploy",
+        "ignored-target",
+        "--exe",
+        exe.strip_prefix(root)
+            .expect("relative exe")
+            .to_str()
+            .unwrap(),
+        "--qmldir",
+        "qml",
+        "--dir",
+        "package",
+        "--deploy-arg",
+        "--compiler-runtime",
+        "--json",
+    ]);
+    let project_root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(
+        json["steps"][0]["args"],
+        serde_json::json!([
+            format!("{project_root}/custom/custom-app{DEPLOY_EXE_SUFFIX}"),
+            "--release",
+            "--qmldir",
+            format!("{project_root}/qml"),
+            "--dir",
+            format!("{project_root}/package"),
+            "--compiler-runtime"
+        ])
+    );
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn deploy_dry_run_missing_artifact_renders_plausible_path_note() {
+    let temp = fixture_project_with_config(
+        r#"
+[qt]
+bin_dir = "qt/bin"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+"#,
+    );
+    let root = temp.path();
+    make_deploy_tool(root);
+
+    let json = qtflow_json(&[
+        "--project",
+        root.to_str().unwrap(),
+        "deploy",
+        "app",
+        "--dry-run",
+        "--json",
+    ]);
+    let project_root = json["projectRoot"].as_str().expect("project root");
+
+    assert_eq!(
+        json["steps"][0]["args"][0],
+        format!("{project_root}/out/build/debug/bin/app{DEPLOY_EXE_SUFFIX}")
+    );
+    assert!(json["notes"][0]
+        .as_str()
+        .expect("note")
+        .contains("Run qtflow build <target> first or pass --exe"));
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn qmake_deploy_plan_uses_same_deploy_tool_shape() {
+    let temp = qmake_fixture_project(
+        r#"
+build_system = "qmake"
+
+[qt]
+bin_dir = "qt/bin"
+
+[qmake]
+qmake = "qmake-stub"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+build_dir = "out/build/debug"
+"#,
+    );
+    let root = temp.path();
+    make_deploy_tool(root);
+    let exe = root
+        .join("out")
+        .join("build")
+        .join("debug")
+        .join("bin")
+        .join(format!("app{DEPLOY_EXE_SUFFIX}"));
+    std::fs::create_dir_all(exe.parent().expect("exe parent")).expect("exe dir");
+    std::fs::write(&exe, "").expect("exe");
+
+    let json = qtflow_json(&[
+        "--project",
+        root.to_str().unwrap(),
+        "plan",
+        "deploy",
+        "app",
+        "--json",
+    ]);
+
+    assert_eq!(json["steps"][0]["label"], "deploy");
+    assert_eq!(json["steps"][0]["args"][1], "--debug");
 }
 
 #[test]

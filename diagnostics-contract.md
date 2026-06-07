@@ -170,6 +170,28 @@ Fix:
 - Add Qt bin directory to PATH.
 - Run deployment helper if the project uses one.
 
+### Deploy Tool Not Found
+
+Code: `deploy.tool_not_found`
+
+Patterns:
+
+```text
+'windeployqt' is not recognized
+windeployqt: command not found
+failed to spawn command 'windeployqt'
+failed to spawn command 'windeployqt.exe'
+'macdeployqt' is not recognized
+macdeployqt: command not found
+failed to spawn command 'macdeployqt'
+```
+
+Fix:
+
+- Set `[qt].bin_dir` in `.qtflow.toml`.
+- Install Qt deployment tools for the selected Qt kit.
+- Run `qtflow doctor`.
+
 ### CTest No Tests Matched
 
 Code: `ctest.no_tests_matched`
@@ -197,9 +219,9 @@ Required in MVP:
 - `cmake.preset_missing`
 - `tool.cmake_not_found`
 - `tool.ctest_not_found`
+- `deploy.tool_not_found`
 
 Optional in MVP:
 
 - `qt.runtime_dll_missing`
 - `ctest.no_tests_matched`
-

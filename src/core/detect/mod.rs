@@ -3,6 +3,7 @@ use std::process::Command;
 pub mod builddir;
 pub mod cmake;
 pub mod ctest;
+pub mod deploy;
 pub mod msvc;
 pub mod ninja;
 pub mod qmake;

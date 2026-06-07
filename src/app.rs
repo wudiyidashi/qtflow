@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::cli::{
-    BuildArgs, CheckArgs, Cli, Command, ConfigureArgs, DoctorArgs, GlobalArgs, InitAgentArg,
-    InitArgs, InitLayoutArg, PlanCommand, TestArgs,
+    BuildArgs, CheckArgs, Cli, Command, ConfigureArgs, DeployArgs, DoctorArgs, GlobalArgs,
+    InitAgentArg, InitArgs, InitLayoutArg, PlanCommand, TestArgs,
 };
 use crate::core::config::merge::{resolve, ConfigOverrides};
 use crate::core::config::model::{BuildSystem, ConfigSource, Profile, ResolvedConfig};
@@ -17,7 +17,7 @@ use crate::core::detect::msvc::{
     known_vsdevcmd_candidates, resolve_vsdevcmd, MsvcResolveInput, VsDevCmdResolution,
     VsDevCmdSource,
 };
-use crate::core::detect::{cmake, ctest, ninja, qmake, qt, Probe, SystemProbe};
+use crate::core::detect::{cmake, ctest, deploy, ninja, qmake, qt, Probe, SystemProbe};
 use crate::core::diagnostics::report::{self, DiagnosticReport};
 use crate::core::diagnostics::{
     exit_code_override, CommandKind, DiagnosticContext, Engine, Platform,
@@ -30,8 +30,9 @@ use crate::core::init::{
 use crate::core::path::{path_to_slash, serialize_optional_path, serialize_path};
 use crate::core::plan::{CommandPlan, EnvironmentBootstrap};
 use crate::core::planners::{
-    self, BuildPlanInputs, CheckPlanInputs, ConfigurePlanInputs, PlanContext, PlanMsvc,
-    PlanProfile, PlanQmake, PlanTools, QmakeBuildConfig, TestPlanInputs,
+    self, BuildPlanInputs, CheckPlanInputs, ConfigurePlanInputs, DeployBuildConfig,
+    DeployPlanInputs, PlanContext, PlanMsvc, PlanProfile, PlanQmake, PlanTools, QmakeBuildConfig,
+    TestPlanInputs,
 };
 use crate::core::project::{
     discover_root, discover_root_with_preference, locate_project_config, BuildSystemPreference,
@@ -72,6 +73,7 @@ pub enum InvocationCommand {
     Build(BuildInvocation),
     Test(TestInvocation),
     Check(CheckInvocation),
+    Deploy(DeployInvocation),
     Plan(PlanInvocation),
 }
 
@@ -140,12 +142,26 @@ pub struct CheckInvocation {
     pub vsdevcmd: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DeployInvocation {
+    pub target: Option<String>,
+    pub exe: Option<PathBuf>,
+    pub release: bool,
+    pub debug: bool,
+    pub qmldir: Option<PathBuf>,
+    pub dir: Option<PathBuf>,
+    pub deploy_arg: Vec<String>,
+    pub no_msvc_bootstrap: bool,
+    pub vsdevcmd: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone)]
 pub enum PlanInvocation {
     Configure(ConfigureInvocation),
     Build(BuildInvocation),
     Test(TestInvocation),
     Check(CheckInvocation),
+    Deploy(DeployInvocation),
 }
 
 impl From<Cli> for Invocation {
@@ -181,6 +197,7 @@ impl From<Command> for InvocationCommand {
             Command::Build(args) => Self::Build(args.into()),
             Command::Test(args) => Self::Test(args.into()),
             Command::Check(args) => Self::Check(args.into()),
+            Command::Deploy(args) => Self::Deploy(args.into()),
             Command::Plan { command } => Self::Plan(command.into()),
         }
     }
@@ -291,6 +308,22 @@ impl From<CheckArgs> for CheckInvocation {
     }
 }
 
+impl From<DeployArgs> for DeployInvocation {
+    fn from(args: DeployArgs) -> Self {
+        Self {
+            target: args.target,
+            exe: args.exe,
+            release: args.release,
+            debug: args.debug,
+            qmldir: args.qmldir,
+            dir: args.dir,
+            deploy_arg: args.deploy_arg,
+            no_msvc_bootstrap: args.no_msvc_bootstrap,
+            vsdevcmd: args.vsdevcmd,
+        }
+    }
+}
+
 impl From<PlanCommand> for PlanInvocation {
     fn from(command: PlanCommand) -> Self {
         match command {
@@ -298,6 +331,7 @@ impl From<PlanCommand> for PlanInvocation {
             PlanCommand::Build(args) => Self::Build(args.into()),
             PlanCommand::Test(args) => Self::Test(args.into()),
             PlanCommand::Check(args) => Self::Check(args.into()),
+            PlanCommand::Deploy(args) => Self::Deploy(args.into()),
         }
     }
 }
@@ -330,6 +364,12 @@ fn dispatch(invocation: Invocation) -> Result<(), QtflowError> {
             "check",
             false,
         ),
+        InvocationCommand::Deploy(args) => run_planned_command(
+            &invocation.global,
+            PlanInvocation::Deploy(args.clone()),
+            "deploy",
+            false,
+        ),
         InvocationCommand::Plan(args) => {
             run_planned_command(&invocation.global, args.clone(), "plan", true)
         }
@@ -344,7 +384,13 @@ fn run_planned_command(
 ) -> Result<(), QtflowError> {
     let render_only = force_render || global.dry_run;
     let ctx = resolve_context(global, plan_overrides(&invocation))?;
-    let plan = build_command_plan(&ctx, &invocation)?;
+    let plan = match build_command_plan(&ctx, &invocation, render_only) {
+        Ok(plan) => plan,
+        Err(QtflowError::ReportedMessage { message, exit_code }) => {
+            return report_rendered_failure(global, &message, exit_code, Vec::new());
+        }
+        Err(err) => return Err(err),
+    };
     let bootstrap = match resolve_execution_bootstrap(&ctx, &invocation, render_only) {
         Ok(bootstrap) => bootstrap,
         Err(QtflowError::EnvironmentBootstrap(message)) => {
@@ -455,25 +501,32 @@ fn report_rendered_failure(
 fn build_command_plan(
     ctx: &AppContext,
     invocation: &PlanInvocation,
+    render_only: bool,
 ) -> Result<CommandPlan, QtflowError> {
-    let plan_ctx = build_plan_context(ctx, invocation);
+    let plan_ctx = build_plan_context(ctx, invocation, render_only)?;
     match ctx.project.kind {
         ProjectKind::Cmake => match &plan_ctx.command {
             planners::PlanCommand::Configure(_) => planners::configure::plan(&plan_ctx),
             planners::PlanCommand::Build(_) => planners::build::plan(&plan_ctx),
             planners::PlanCommand::Test(_) => planners::test::plan(&plan_ctx),
             planners::PlanCommand::Check(_) => planners::check::plan(&plan_ctx),
+            planners::PlanCommand::Deploy(_) => planners::deploy::plan(&plan_ctx),
         },
         ProjectKind::Qmake => match &plan_ctx.command {
             planners::PlanCommand::Configure(_) => planners::qmake_configure::plan(&plan_ctx),
             planners::PlanCommand::Build(_) => planners::qmake_build::plan(&plan_ctx),
             planners::PlanCommand::Test(_) => planners::qmake_test::plan(&plan_ctx),
             planners::PlanCommand::Check(_) => planners::qmake_check::plan(&plan_ctx),
+            planners::PlanCommand::Deploy(_) => planners::deploy::plan(&plan_ctx),
         },
     }
 }
 
-fn build_plan_context(ctx: &AppContext, invocation: &PlanInvocation) -> PlanContext {
+fn build_plan_context(
+    ctx: &AppContext,
+    invocation: &PlanInvocation,
+    render_only: bool,
+) -> Result<PlanContext, QtflowError> {
     let active_profile = ctx
         .config
         .profiles
@@ -482,7 +535,7 @@ fn build_plan_context(ctx: &AppContext, invocation: &PlanInvocation) -> PlanCont
     let mut plan_profile = PlanProfile::from(active_profile);
     plan_profile.path_prepend = command_path_prepend(ctx, active_profile);
 
-    PlanContext {
+    Ok(PlanContext {
         project_root: ctx.project.root.clone(),
         profile: ctx.config.active_profile.clone(),
         active_profile: plan_profile,
@@ -510,9 +563,12 @@ fn build_plan_context(ctx: &AppContext, invocation: &PlanInvocation) -> PlanCont
             host_arch: ctx.config.msvc.host_arch.clone(),
             vsdevcmd: None,
         },
-        command: invocation
-            .plan_command_with_profile_config_name(active_profile.config_name.as_deref()),
-    }
+        command: invocation.plan_command_with_profile_config_name(
+            ctx,
+            active_profile.config_name.as_deref(),
+            render_only,
+        )?,
+    })
 }
 
 fn resolved_ninja_for_plan(ctx: &AppContext) -> Option<PathBuf> {
@@ -580,6 +636,170 @@ fn qmake_config_for_profile(profile: &str, profile_config_name: Option<&str>) ->
         QmakeBuildConfig::Release
     } else {
         QmakeBuildConfig::Debug
+    }
+}
+
+fn deploy_plan_inputs(
+    ctx: &AppContext,
+    args: &DeployInvocation,
+    profile_config_name: Option<&str>,
+    render_only: bool,
+) -> Result<DeployPlanInputs, QtflowError> {
+    let active_profile = ctx
+        .config
+        .profiles
+        .get(&ctx.config.active_profile)
+        .expect("active profile is inserted during resolution");
+    let deploy_tool = resolve_deploy_tool_for_command(ctx)?;
+    let config = deploy_build_config(args, &ctx.config.active_profile, profile_config_name);
+    let exe_input = deploy::ExecutableResolveInput {
+        project_root: ctx.project.root.clone(),
+        build_dir: active_profile.build_dir.clone(),
+        target: args.target.clone(),
+        explicit_exe: args.exe.clone(),
+        exe_suffix: deploy_exe_suffix().to_string(),
+        accept_app_bundle: cfg!(target_os = "macos"),
+    };
+    let mut notes = Vec::new();
+    let exe = match deploy::resolve_executable(&exe_input) {
+        deploy::ExecutableResolution::Found { path } => path,
+        deploy::ExecutableResolution::Missing { path, target } if render_only => {
+            notes.push(deploy_missing_executable_note(&path, target.as_deref()));
+            path
+        }
+        deploy::ExecutableResolution::Missing { path, target } => {
+            return Err(deploy_artifact_missing_error(&path, target.as_deref()));
+        }
+        deploy::ExecutableResolution::MissingTarget => {
+            return Err(QtflowError::ConfigOrArg(
+                "deploy requires a target or --exe <path>".to_string(),
+            ));
+        }
+    };
+
+    Ok(DeployPlanInputs {
+        tool: deploy_tool,
+        exe,
+        config,
+        qmldir: args
+            .qmldir
+            .as_ref()
+            .map(|path| absolutize_for_command(&ctx.project.root, path)),
+        dir: args
+            .dir
+            .as_ref()
+            .map(|path| absolutize_for_command(&ctx.project.root, path)),
+        deploy_args: args.deploy_arg.clone(),
+        notes,
+    })
+}
+
+fn resolve_deploy_tool_for_command(ctx: &AppContext) -> Result<PathBuf, QtflowError> {
+    let input = deploy::DeployToolResolveInput::real(
+        deploy::HostPlatform::current(),
+        deploy_qt_bin_dir(ctx),
+        qmake_path_for_deploy_detection(ctx),
+    );
+    match deploy::resolve_deploy_tool(&input) {
+        deploy::DeployToolResolution::Found { path, .. } => Ok(path),
+        deploy::DeployToolResolution::NotFound {
+            tool_name,
+            searched,
+        } => Err(deploy_tool_not_found_error(&tool_name, &searched)),
+        deploy::DeployToolResolution::Unsupported { message, .. } => {
+            Err(deploy_unsupported_error(&message))
+        }
+    }
+}
+
+fn qmake_path_for_deploy_detection(ctx: &AppContext) -> Option<PathBuf> {
+    let input = qmake::QmakeResolveInput::real(ctx.config.qmake.qmake.clone(), ctx.env.clone());
+    qmake::resolve_qmake(&input).path
+}
+
+fn deploy_qt_bin_dir(ctx: &AppContext) -> Option<PathBuf> {
+    ctx.config
+        .qt
+        .bin_dir
+        .as_ref()
+        .map(|path| absolutize_for_command(&ctx.project.root, path))
+}
+
+fn deploy_build_config(
+    args: &DeployInvocation,
+    profile: &str,
+    profile_config_name: Option<&str>,
+) -> DeployBuildConfig {
+    if args.release {
+        return DeployBuildConfig::Release;
+    }
+    if args.debug {
+        return DeployBuildConfig::Debug;
+    }
+    let value = profile_config_name.unwrap_or(profile).to_lowercase();
+    if value.contains("release") {
+        DeployBuildConfig::Release
+    } else {
+        DeployBuildConfig::Debug
+    }
+}
+
+fn deploy_exe_suffix() -> &'static str {
+    if cfg!(windows) {
+        ".exe"
+    } else {
+        ""
+    }
+}
+
+fn deploy_missing_executable_note(path: &Path, target: Option<&str>) -> String {
+    let target_hint = target
+        .map(|target| format!(" for target '{target}'"))
+        .unwrap_or_default();
+    format!(
+        "deploy executable{target_hint} was not found; rendering the most likely path {}. Run qtflow build <target> first or pass --exe.",
+        path_to_slash(path)
+    )
+}
+
+fn deploy_artifact_missing_error(path: &Path, target: Option<&str>) -> QtflowError {
+    let target_hint = target
+        .map(|target| format!(" for target '{target}'"))
+        .unwrap_or_default();
+    QtflowError::ReportedMessage {
+        message: format!(
+            "deploy executable{target_hint} was not found at {}. Run qtflow build <target> first or pass --exe <path>.",
+            path_to_slash(path)
+        ),
+        exit_code: 4,
+    }
+}
+
+fn deploy_tool_not_found_error(
+    tool_name: &str,
+    searched: &[deploy::DeployToolSearch],
+) -> QtflowError {
+    let searched = searched
+        .iter()
+        .map(|candidate| path_to_slash(&candidate.path))
+        .collect::<Vec<_>>();
+    let searched_text = if searched.is_empty() {
+        "PATH".to_string()
+    } else {
+        format!("{}, PATH", searched.join(", "))
+    };
+    QtflowError::ReportedMessage {
+        message: format!(
+            "{tool_name} was not found; searched {searched_text}. Set [qt].bin_dir, install Qt deployment tools, or run qtflow doctor."
+        ),
+        exit_code: 3,
+    }
+}
+
+fn deploy_unsupported_error(message: &str) -> QtflowError {
+    QtflowError::ReportedMessage {
+        message: message.to_string(),
+        exit_code: 3,
     }
 }
 
@@ -680,6 +900,7 @@ impl PlanInvocation {
             Self::Build(args) => args.no_msvc_bootstrap,
             Self::Test(args) => args.no_msvc_bootstrap,
             Self::Check(args) => args.no_msvc_bootstrap,
+            Self::Deploy(args) => args.no_msvc_bootstrap,
         }
     }
 
@@ -689,20 +910,23 @@ impl PlanInvocation {
             Self::Build(args) => args.vsdevcmd.clone(),
             Self::Test(args) => args.vsdevcmd.clone(),
             Self::Check(args) => args.vsdevcmd.clone(),
+            Self::Deploy(args) => args.vsdevcmd.clone(),
         }
     }
 
     fn plan_command_with_profile_config_name(
         &self,
+        ctx: &AppContext,
         profile_config_name: Option<&str>,
-    ) -> planners::PlanCommand {
+        render_only: bool,
+    ) -> Result<planners::PlanCommand, QtflowError> {
         match self {
-            Self::Configure(args) => planners::PlanCommand::Configure(ConfigurePlanInputs {
+            Self::Configure(args) => Ok(planners::PlanCommand::Configure(ConfigurePlanInputs {
                 preset: args.preset.clone(),
                 generator: args.generator.clone(),
                 fresh: args.fresh,
-            }),
-            Self::Build(args) => planners::PlanCommand::Build(BuildPlanInputs {
+            })),
+            Self::Build(args) => Ok(planners::PlanCommand::Build(BuildPlanInputs {
                 target: args.target.clone(),
                 build_dir: args.build_dir.clone(),
                 parallel: args.parallel,
@@ -711,8 +935,8 @@ impl PlanInvocation {
                     profile_config_name,
                 ),
                 all: args.all,
-            }),
-            Self::Test(args) => planners::PlanCommand::Test(TestPlanInputs {
+            })),
+            Self::Test(args) => Ok(planners::PlanCommand::Test(TestPlanInputs {
                 regex: args.regex.clone(),
                 build_target: args.build_target.clone(),
                 build_dir: args.build_dir.clone(),
@@ -724,8 +948,8 @@ impl PlanInvocation {
                 no_output_on_failure: args.no_output_on_failure,
                 ctest_arg: args.ctest_arg.clone(),
                 parallel: args.parallel,
-            }),
-            Self::Check(args) => planners::PlanCommand::Check(CheckPlanInputs {
+            })),
+            Self::Check(args) => Ok(planners::PlanCommand::Check(CheckPlanInputs {
                 target: args.target.clone(),
                 test_regex: args.test_regex.clone(),
                 build_dir: args.build_dir.clone(),
@@ -735,7 +959,13 @@ impl PlanInvocation {
                 ),
                 parallel: args.parallel,
                 ctest_arg: args.ctest_arg.clone(),
-            }),
+            })),
+            Self::Deploy(args) => Ok(planners::PlanCommand::Deploy(deploy_plan_inputs(
+                ctx,
+                args,
+                profile_config_name,
+                render_only,
+            )?)),
         }
     }
 }
@@ -1200,12 +1430,22 @@ impl ProvidesConfigOverrides for CheckInvocation {
     }
 }
 
+impl ProvidesConfigOverrides for DeployInvocation {
+    fn config_overrides(&self) -> ConfigOverrides {
+        ConfigOverrides {
+            vsdevcmd: self.vsdevcmd.clone(),
+            ..ConfigOverrides::default()
+        }
+    }
+}
+
 fn plan_overrides(args: &PlanInvocation) -> ConfigOverrides {
     match args {
         PlanInvocation::Configure(args) => args.config_overrides(),
         PlanInvocation::Build(args) => args.config_overrides(),
         PlanInvocation::Test(args) => args.config_overrides(),
         PlanInvocation::Check(args) => args.config_overrides(),
+        PlanInvocation::Deploy(args) => args.config_overrides(),
     }
 }
 
@@ -1235,6 +1475,7 @@ struct DoctorReport {
     ctest: DoctorTool,
     ninja: DoctorNinja,
     qmake: DoctorQmake,
+    deploy: DoctorDeploy,
     cmake_presets: Vec<String>,
     discovered_build_dirs: Vec<DoctorDiscoveredBuildDir>,
     build_dir_warnings: Vec<DoctorBuildDirWarning>,
@@ -1307,6 +1548,20 @@ struct DoctorQmakeRejectedCandidate {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DoctorDeploy {
+    tool: String,
+    path: Option<String>,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    searched: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DoctorDiscoveredBuildDir {
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1364,6 +1619,7 @@ impl DoctorReport {
         });
         let ninja = DoctorNinja::from_context(ctx);
         let qmake = DoctorQmake::from_context(ctx, args.no_probe, probe);
+        let deploy = DoctorDeploy::from_context(ctx);
         let (cmake_presets, mut warnings) = list_presets_for_doctor(ctx);
         if ctx.project.kind == ProjectKind::Cmake {
             if let Some(preset) = &selected.preset {
@@ -1399,6 +1655,7 @@ impl DoctorReport {
             ctest,
             ninja,
             qmake,
+            deploy,
             cmake_presets,
             discovered_build_dirs,
             build_dir_warnings,
@@ -1518,6 +1775,52 @@ impl DoctorQmakeRejectedCandidate {
     }
 }
 
+impl DoctorDeploy {
+    fn from_context(ctx: &AppContext) -> Self {
+        let input = deploy::DeployToolResolveInput::real(
+            deploy::HostPlatform::current(),
+            deploy_qt_bin_dir(ctx),
+            qmake_path_for_deploy_detection(ctx),
+        );
+        match deploy::resolve_deploy_tool(&input) {
+            deploy::DeployToolResolution::Found {
+                path,
+                source,
+                tool_name,
+            } => Self {
+                tool: tool_name,
+                path: Some(path_to_slash(&path)),
+                status: "found".to_string(),
+                source: Some(deploy_tool_source_display(source)),
+                searched: Vec::new(),
+                message: None,
+            },
+            deploy::DeployToolResolution::NotFound {
+                tool_name,
+                searched,
+            } => Self {
+                tool: tool_name,
+                path: None,
+                status: "notFound".to_string(),
+                source: None,
+                searched: searched
+                    .iter()
+                    .map(|candidate| path_to_slash(&candidate.path))
+                    .collect(),
+                message: None,
+            },
+            deploy::DeployToolResolution::Unsupported { message, .. } => Self {
+                tool: "<none>".to_string(),
+                path: None,
+                status: "notApplicable".to_string(),
+                source: None,
+                searched: Vec::new(),
+                message: Some(message),
+            },
+        }
+    }
+}
+
 impl DoctorMsvcBootstrap {
     fn from_context(ctx: &AppContext, no_probe: bool) -> Self {
         if !cfg!(windows) {
@@ -1631,6 +1934,25 @@ fn print_doctor_text(report: &DoctorReport) {
     );
     for candidate in &report.qmake.rejected_candidates {
         println!("qmake rejected: {} ({})", candidate.path, candidate.reason);
+    }
+    match &report.deploy.path {
+        Some(path) => println!(
+            "Deploy tool: {} ({}) via {}",
+            path,
+            report.deploy.tool,
+            report.deploy.source.as_deref().unwrap_or("<unknown>")
+        ),
+        None => println!(
+            "Deploy tool: {} ({}){}",
+            report.deploy.tool,
+            report.deploy.status,
+            report
+                .deploy
+                .message
+                .as_deref()
+                .map(|message| format!(" - {message}"))
+                .unwrap_or_default()
+        ),
     }
     println!(
         "CMake presets: {}",
@@ -1823,6 +2145,15 @@ fn ninja_source_display(source: ninja::NinjaSource) -> String {
         ninja::NinjaSource::Config => "config",
         ninja::NinjaSource::EnvQtflow => "env:QTFLOW_NINJA",
         ninja::NinjaSource::Path => "path",
+    }
+    .to_string()
+}
+
+fn deploy_tool_source_display(source: deploy::DeployToolSource) -> String {
+    match source {
+        deploy::DeployToolSource::QtBinDir => "qt.binDir",
+        deploy::DeployToolSource::QmakeSibling => "qmakeSibling",
+        deploy::DeployToolSource::Path => "path",
     }
     .to_string()
 }
@@ -2027,5 +2358,44 @@ mod tests {
         .expect_err("reported failure");
 
         assert_eq!(err.exit_code(), 3);
+    }
+
+    #[test]
+    fn deploy_build_config_infers_release_from_profile_name_or_config_name() {
+        let args = DeployInvocation::default();
+
+        assert_eq!(
+            deploy_build_config(&args, "release", None),
+            DeployBuildConfig::Release
+        );
+        assert_eq!(
+            deploy_build_config(&args, "custom", Some("Release")),
+            DeployBuildConfig::Release
+        );
+        assert_eq!(
+            deploy_build_config(&args, "custom", Some("Debug")),
+            DeployBuildConfig::Debug
+        );
+    }
+
+    #[test]
+    fn deploy_build_config_cli_flags_override_profile_inference() {
+        let release_args = DeployInvocation {
+            release: true,
+            ..DeployInvocation::default()
+        };
+        let debug_args = DeployInvocation {
+            debug: true,
+            ..DeployInvocation::default()
+        };
+
+        assert_eq!(
+            deploy_build_config(&release_args, "debug", None),
+            DeployBuildConfig::Release
+        );
+        assert_eq!(
+            deploy_build_config(&debug_args, "release", None),
+            DeployBuildConfig::Debug
+        );
     }
 }

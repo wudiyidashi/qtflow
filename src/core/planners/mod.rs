@@ -7,6 +7,7 @@ use crate::core::plan::{CommandStep, EnvironmentBootstrap};
 pub mod build;
 pub mod check;
 pub mod configure;
+pub mod deploy;
 pub mod qmake_build;
 pub mod qmake_check;
 pub mod qmake_configure;
@@ -61,6 +62,12 @@ pub enum QmakeBuildConfig {
     Release,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeployBuildConfig {
+    Debug,
+    Release,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanMsvc {
     pub is_windows: bool,
@@ -77,6 +84,7 @@ pub enum PlanCommand {
     Build(BuildPlanInputs),
     Test(TestPlanInputs),
     Check(CheckPlanInputs),
+    Deploy(DeployPlanInputs),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -115,6 +123,31 @@ pub struct CheckPlanInputs {
     pub config_name: Option<String>,
     pub parallel: Option<u32>,
     pub ctest_arg: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeployPlanInputs {
+    pub tool: PathBuf,
+    pub exe: PathBuf,
+    pub config: DeployBuildConfig,
+    pub qmldir: Option<PathBuf>,
+    pub dir: Option<PathBuf>,
+    pub deploy_args: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+impl Default for DeployPlanInputs {
+    fn default() -> Self {
+        Self {
+            tool: PathBuf::from("windeployqt"),
+            exe: PathBuf::from("/repo/out/build/debug/bin/app"),
+            config: DeployBuildConfig::Debug,
+            qmldir: None,
+            dir: None,
+            deploy_args: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
 }
 
 pub fn bootstrap(ctx: &PlanContext) -> Option<EnvironmentBootstrap> {

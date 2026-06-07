@@ -18,6 +18,7 @@ pub enum CommandKind {
     Configure,
     Build,
     Test,
+    Deploy,
 }
 
 impl CommandKind {
@@ -26,6 +27,7 @@ impl CommandKind {
             "configure" => Some(Self::Configure),
             "build" => Some(Self::Build),
             "test" => Some(Self::Test),
+            "deploy" => Some(Self::Deploy),
             _ => None,
         }
     }
@@ -132,6 +134,7 @@ pub fn exit_code_override(findings: &[Finding], bootstrap_used: bool) -> Option<
                 | "tool.ctest_not_found"
                 | "qmake.not_found"
                 | "make.tool_not_found"
+                | "deploy.tool_not_found"
         )
     }) {
         return Some(3);
@@ -258,6 +261,11 @@ mod tests {
                 "'nmake' is not recognized as an internal or external command\n",
                 "make.tool_not_found",
             ),
+            (
+                CommandKind::Deploy,
+                "'windeployqt' is not recognized as an internal or external command\n",
+                "deploy.tool_not_found",
+            ),
         ];
 
         for (kind, log, code) in cases {
@@ -337,6 +345,10 @@ mod tests {
             code: "qmake.not_found".to_string(),
             ..vsdevcmd.clone()
         };
+        let deploy = Finding {
+            code: "deploy.tool_not_found".to_string(),
+            ..vsdevcmd.clone()
+        };
 
         assert_eq!(exit_code_override(&[vsdevcmd], true), Some(6));
         assert_eq!(
@@ -346,6 +358,7 @@ mod tests {
         assert_eq!(exit_code_override(&[headers], true), None);
         assert_eq!(exit_code_override(&[cmake], false), Some(3));
         assert_eq!(exit_code_override(&[qmake], false), Some(3));
+        assert_eq!(exit_code_override(&[deploy], false), Some(3));
         assert_eq!(exit_code_override(&[], false), None);
     }
 }

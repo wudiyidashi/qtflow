@@ -19,6 +19,7 @@ fn top_level_help_lists_commands_with_content() {
         "build",
         "test",
         "check",
+        "deploy",
         "plan",
         "init",
     ] {

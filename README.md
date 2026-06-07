@@ -61,6 +61,7 @@ qtflow configure --profile debug
 qtflow build <target>
 qtflow check <target>
 qtflow test <regex> --build-target <target>
+qtflow deploy <target>
 ```
 
 Preview without executing, or emit JSON for agents:
@@ -223,8 +224,34 @@ Renders the same command plan as `--dry-run`, without executing it.
 qtflow plan configure --profile debug
 qtflow plan build app --profile release
 qtflow plan check route_dispatcher_request_build_test
+qtflow plan deploy app
 qtflow plan check route_dispatcher_request_build_test --json
 ```
+
+### deploy
+
+Bundles Qt runtime libraries and plugins next to a built executable using Qt's official deployment tool: `windeployqt` on Windows and `macdeployqt` on macOS. Linux is not supported because Qt does not ship an official Linux deployment tool; use `linuxdeployqt`, package manually, or document runtime dependencies.
+
+```powershell
+qtflow deploy app
+qtflow deploy app --release
+qtflow deploy app --qmldir qml
+qtflow deploy app --dir package
+qtflow deploy --exe out/build/debug/bin/app.exe
+qtflow plan deploy app --json
+```
+
+Key options:
+
+- `<target>`: build target whose executable should be deployed.
+- `--exe <path>`: explicit executable or `.app` bundle; relative paths are resolved from the project root.
+- `--release` / `--debug`: choose Qt runtime flavor. If omitted, qtflow infers release when the active profile/config name contains `release`; otherwise debug.
+- `--qmldir <dir>`: pass `--qmldir <dir>` to the deployment tool.
+- `--dir <path>`: deployment output directory; defaults to next to the executable.
+- `--deploy-arg <arg>`: extra passthrough argument; repeatable. For values beginning with `-`, use `--deploy-arg --flag`.
+- `--no-msvc-bootstrap`, `--vsdevcmd <path>`: MSVC bootstrap controls.
+
+Executable discovery uses `--exe` first. Otherwise qtflow searches the active profile `build_dir` for `<build_dir>/bin/<target><suffix>`, then `<build_dir>/<target><suffix>`, then a shallow recursive search while skipping `CMakeFiles` and `_deps`. On macOS, `<target>.app` bundles are also accepted. In `plan` / `--dry-run`, a missing executable still renders the most likely path with a note; real `deploy` exits with code 4 and suggests `qtflow build <target>` or `--exe`.
 
 ## Configuration
 
@@ -455,6 +482,7 @@ Rule codes:
 - `qmake.conda_qmake`: qmake output suggests a conda/anaconda qmake was selected.
 - `qmake.spec_missing`: qmake mkspec is missing or invalid.
 - `make.tool_not_found`: qmake make tool such as `nmake`, `jom`, or `mingw32-make` could not be started.
+- `deploy.tool_not_found`: `windeployqt` or `macdeployqt` could not be started.
 
 ## Exit Codes
 

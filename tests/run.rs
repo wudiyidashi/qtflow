@@ -113,6 +113,20 @@ fn clean_qtflow() -> Command {
     command
 }
 
+#[cfg(windows)]
+const DEPLOY_TOOL_NAME: &str = "windeployqt.exe";
+#[cfg(target_os = "macos")]
+const DEPLOY_TOOL_NAME: &str = "macdeployqt";
+
+#[cfg(any(windows, target_os = "macos"))]
+fn make_deploy_tool(root: &Path) -> PathBuf {
+    let qt_bin = root.join("qt").join("bin");
+    std::fs::create_dir_all(&qt_bin).expect("qt bin");
+    let tool = qt_bin.join(DEPLOY_TOOL_NAME);
+    std::fs::write(&tool, "").expect("deploy tool");
+    tool
+}
+
 #[test]
 fn build_executes_plan_and_success_exits_zero() {
     let temp = fixture_project_with_cmake_stub(CmakeStub::Success);
@@ -122,6 +136,62 @@ fn build_executes_plan_and_success_exits_zero() {
         .args(["build", "--no-msvc-bootstrap"])
         .assert()
         .success();
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn deploy_missing_executable_maps_to_exit_four() {
+    let temp = fixture_project(
+        r#"
+[qt]
+bin_dir = "qt/bin"
+
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+"#,
+    );
+    make_deploy_tool(temp.path());
+
+    clean_qtflow()
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["deploy", "app"])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains(
+            "deploy executable for target 'app' was not found",
+        ))
+        .stderr(predicate::str::contains(
+            "qtflow build <target> first or pass --exe",
+        ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn deploy_on_linux_maps_to_exit_three_with_clear_message() {
+    let temp = fixture_project(
+        r#"
+[msvc]
+enabled = false
+
+[profiles.debug]
+preset = "Qt-Debug"
+build_dir = "out/build/debug"
+"#,
+    );
+
+    clean_qtflow()
+        .args(["--project", temp.path().to_str().unwrap()])
+        .args(["deploy", "app"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "Qt does not provide an official Linux deployment tool",
+        ))
+        .stderr(predicate::str::contains("linuxdeployqt"));
 }
 
 #[test]

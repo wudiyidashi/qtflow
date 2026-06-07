@@ -42,6 +42,9 @@ pub enum QtflowError {
     #[error("reported failure")]
     ReportedFailure { exit_code: i32 },
 
+    #[error("{message}")]
+    ReportedMessage { message: String, exit_code: i32 },
+
     #[error("failed to spawn command '{program}': {source}")]
     CommandSpawn {
         program: String,
@@ -55,6 +58,7 @@ impl QtflowError {
         match self {
             Self::CommandFailed(_) => 1,
             Self::ReportedFailure { exit_code } => *exit_code,
+            Self::ReportedMessage { exit_code, .. } => *exit_code,
             Self::ConfigOrArg(_) | Self::ConfigParse { .. } => 2,
             Self::ToolNotFound(_) | Self::CommandSpawn { .. } => 3,
             Self::ProjectRootNotFound { .. }

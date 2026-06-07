@@ -6,10 +6,12 @@ const ALL_COMMANDS: &[CommandKind] = &[
     CommandKind::Configure,
     CommandKind::Build,
     CommandKind::Test,
+    CommandKind::Deploy,
 ];
 const BUILD_TEST: &[CommandKind] = &[CommandKind::Build, CommandKind::Test];
 const CONFIGURE_ONLY: &[CommandKind] = &[CommandKind::Configure];
 const TEST_ONLY: &[CommandKind] = &[CommandKind::Test];
+const DEPLOY_ONLY: &[CommandKind] = &[CommandKind::Deploy];
 const CMAKE_ONLY: &[ProjectKind] = &[ProjectKind::Cmake];
 const QMAKE_ONLY: &[ProjectKind] = &[ProjectKind::Qmake];
 const ALL_PROJECTS: &[ProjectKind] = &[ProjectKind::Cmake, ProjectKind::Qmake];
@@ -118,7 +120,29 @@ pub static RULES: &[Rule] = &[
         suggested: &[
             "Configure [qt].bin_dir.",
             "Add Qt bin directory to PATH.",
-            "Run deployment helper if the project uses one.",
+            "Run qtflow deploy <target>.",
+        ],
+    },
+    Rule {
+        code: "deploy.tool_not_found",
+        severity: Severity::Error,
+        patterns: &[
+            "'windeployqt' is not recognized",
+            "windeployqt: command not found",
+            "failed to spawn command 'windeployqt'",
+            "failed to spawn command 'windeployqt.exe'",
+            "'macdeployqt' is not recognized",
+            "macdeployqt: command not found",
+            "failed to spawn command 'macdeployqt'",
+        ],
+        applies_to: DEPLOY_ONLY,
+        project_kinds: ALL_PROJECTS,
+        title: "Qt deployment tool was not found",
+        explanation: "qtflow could not start windeployqt or macdeployqt.",
+        suggested: &[
+            "Set [qt].bin_dir in .qtflow.toml.",
+            "Install Qt deployment tools for the selected Qt kit.",
+            "qtflow doctor",
         ],
     },
     Rule {

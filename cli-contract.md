@@ -9,6 +9,7 @@ qtflow configure [options]
 qtflow build [target] [options]
 qtflow test [regex] [options]
 qtflow check <target> [options]
+qtflow deploy [target] [options]
 ```
 
 ## Global Options
@@ -61,6 +62,7 @@ Purpose: render command plan without executing.
 qtflow plan configure --profile debug
 qtflow plan build app --profile release
 qtflow plan check route_dispatcher_request_build_test
+qtflow plan deploy app
 ```
 
 `plan` should be equivalent to passing `--dry-run`, but it should not require command-specific execution setup.
@@ -181,6 +183,48 @@ cmake --build <build_dir> [--config <name>] --target <target>
 ctest --test-dir <build_dir> [-C <name>] -R <target-or-regex> --output-on-failure
 ```
 
+## deploy
+
+Purpose: bundle Qt runtime files and plugins next to a built executable using Qt's official deployment tool.
+
+```text
+qtflow deploy app
+qtflow deploy app --release
+qtflow deploy app --qmldir qml --dir package
+qtflow deploy --exe out/build/debug/bin/app.exe
+qtflow plan deploy app --json
+```
+
+Options:
+
+```text
+--exe <path>            Explicit executable or macOS .app bundle. Overrides target discovery.
+--release               Deploy release Qt runtime files.
+--debug                 Deploy debug Qt runtime files.
+--qmldir <dir>          Pass --qmldir <dir> to the deploy tool.
+--dir <path>            Deploy/output directory. Defaults to next to the executable.
+--deploy-arg <arg>      Extra deploy-tool argument. Repeatable.
+--no-msvc-bootstrap     Do not call VsDevCmd on Windows.
+--vsdevcmd <path>       Explicit VsDevCmd path.
+```
+
+Behavior:
+
+- Windows resolves `windeployqt(.exe)`; macOS resolves `macdeployqt`.
+- Linux exits 3 with a clear message because Qt has no official Linux deployment tool. Users may choose `linuxdeployqt` or manual packaging.
+- Deploy tool resolution order: `[qt].bin_dir` + tool name, sibling of resolved `qmake`, then PATH.
+- Executable resolution order: `--exe`, then `<build_dir>/bin/<target><suffix>`, then `<build_dir>/<target><suffix>`, then shallow recursive search to depth 4 while skipping `CMakeFiles` and `_deps`.
+- macOS also accepts `<target>.app`.
+- `plan` and `--dry-run` still render a plan when target discovery misses, using `<build_dir>/bin/<target><suffix>` and adding a note.
+- Real `deploy` exits 4 when the executable cannot be found and suggests `qtflow build <target>` or `--exe`.
+
+Plan:
+
+```text
+windeployqt <exe> <--release|--debug> [--qmldir <dir>] [--dir <path>] [deploy-arg...]
+macdeployqt <app-or-exe> <--release|--debug> [--qmldir <dir>] [--dir <path>] [deploy-arg...]
+```
+
 ## Exit Codes
 
 ```text
@@ -188,7 +232,7 @@ ctest --test-dir <build_dir> [-C <name>] -R <target-or-regex> --output-on-failur
 1   Command executed but failed.
 2   Configuration or argument error.
 3   Required tool not found.
-4   Project root/config not found.
+4   Project root/config/artifact not found.
 5   Environment bootstrap failed.
 6   Diagnostic found a known fatal setup issue.
 ```
